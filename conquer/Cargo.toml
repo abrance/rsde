@@ -1,8 +1,5 @@
 [workspace]
-members = [
-    "lib/server",
-    "lib/util",
-]
+members = ["lib/server", "lib/util"]
 resolver = "2"
 
 [workspace.package]
@@ -24,6 +21,7 @@ snafu = { version = "0.8.9", features = ["std", "rust_1_81", "alloc"] }
 tokio = { version = "1.48.0", features = ["full"] }
 server = { path = "lib/server" }
 util = { path = "lib/util" }
+async-trait = "0.1.89"
 
 [[bin]]
 name = "conquer"
