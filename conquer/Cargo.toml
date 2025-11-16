@@ -1,5 +1,5 @@
 [workspace]
-members = ["lib/server", "lib/util"]
+members = ["lib/core","lib/rsync","lib/server", "lib/util"]
 resolver = "2"
 
 [workspace.package]
