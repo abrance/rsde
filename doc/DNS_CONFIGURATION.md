@@ -49,9 +49,11 @@ nameserver 114.114.114.114
 
 ```conf
 [main]
-dns=dnsmasq
+dns=default
 rc-manager=unmanaged
 ```
+
+⚠️ **重要**: 使用 `dns=default` 而不是 `dns=dnsmasq`，避免 NetworkManager 启动自己的 dnsmasq 实例与系统 dnsmasq 服务冲突。
 
 ### 4. 保护 resolv.conf 不被覆盖
 
@@ -141,6 +143,41 @@ telnet test-kafka.bkbase-test.svc.cluster.local 9092
 ```
 
 ## 🔍 故障排查
+
+### 常见问题 1: dnsmasq 启动失败 - 端口 53 被占用
+
+**症状**:
+
+```bash
+sudo systemctl status dnsmasq
+# 显示: failed to create listening socket for port 53: 地址已在使用
+```
+
+**原因**: NetworkManager 启动了自己的 dnsmasq 实例，占用了 53 端口
+
+**解决方案**:
+
+```bash
+# 1. 检查是否有 NetworkManager 的 dnsmasq 进程
+sudo lsof -i :53
+ps aux | grep dnsmasq
+
+# 2. 修改 NetworkManager 配置
+sudo nano /etc/NetworkManager/conf.d/dns.conf
+# 将 dns=dnsmasq 改为 dns=default
+
+# 或使用命令直接修改
+sudo sed -i 's/dns=dnsmasq/dns=default/' /etc/NetworkManager/conf.d/dns.conf
+
+# 3. 重启 NetworkManager
+sudo systemctl restart NetworkManager
+
+# 4. 启动 dnsmasq 服务
+sudo systemctl start dnsmasq
+
+# 5. 验证状态
+sudo systemctl status dnsmasq
+```
 
 ### 1. 检查 dnsmasq 是否正常运行
 
