@@ -211,7 +211,7 @@ pub trait SinkRuntime: Send + Sync {
 }
 
 /// 数据传输管道的元数据
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DataTransferMetadata {
     pub id: String,
     pub name: String,
@@ -220,14 +220,17 @@ pub struct DataTransferMetadata {
 
 /// 数据传输管道配置
 /// 定义了一个完整的 Source -> Transform -> Sink 流程
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DataTransferConfig {
     pub metadata: DataTransferMetadata,
     /// 数据源配置列表（序列化存储）
+    #[serde(default)]
     pub sources: Vec<Box<dyn Source>>,
     /// 转换器配置列表
+    #[serde(default)]
     pub transforms: Vec<Box<dyn Transform>>,
     /// 目标配置列表
+    #[serde(default)]
     pub sinks: Vec<Box<dyn Sink>>,
 }
 

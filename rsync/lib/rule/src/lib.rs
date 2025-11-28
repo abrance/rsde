@@ -2,6 +2,7 @@ pub mod controller;
 pub mod event;
 pub mod file;
 pub mod platform_examples;
+pub mod rule_file_watch;
 
 /// Rule 模块定义了 rsync 的核心抽象：Source, Transform, Sink
 ///

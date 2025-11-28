@@ -1,0 +1,24 @@
+[metadata]
+id = "toml-pipeline"
+name = "TOML Pipeline"
+description = "A pipeline loaded from TOML"
+
+[[sources]]
+source_type = "file"
+path = "/opt/mystorage/github/rsde/rsync/lib/rule/README.md"
+watch = true
+
+[[transforms]]
+transform_type = "json"
+add_timestamp = true
+
+[[sinks]]
+sink_type = "file"
+path = "/tmp/toml_output.txt"
+force = true
+
+[sinks.env.platform]
+kernel = "Linux"
+arch = "X86_64"
+[sinks.env.platform.distribution]
+Unknown = {}

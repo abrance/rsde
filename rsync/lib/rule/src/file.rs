@@ -437,7 +437,7 @@ impl FileSourceConfig {
     }
 }
 
-#[typetag::serde]
+#[typetag::serde(name = "file")]
 #[async_trait]
 impl Source for FileSourceConfig {
     fn clone_box(&self) -> Box<dyn Source> {
@@ -536,7 +536,7 @@ pub struct JsonTransformConfig {
     pub add_timestamp: bool,
 }
 
-#[typetag::serde]
+#[typetag::serde(name = "json")]
 #[async_trait]
 impl Transform for JsonTransformConfig {
     fn clone_box(&self) -> Box<dyn Transform> {
@@ -575,7 +575,7 @@ pub struct HttpSinkConfig {
     pub batch_size: usize,
 }
 
-#[typetag::serde]
+#[typetag::serde(name = "http")]
 #[async_trait]
 impl Sink for HttpSinkConfig {
     fn clone_box(&self) -> Box<dyn Sink> {
@@ -650,7 +650,7 @@ impl SinkRuntime for FileSinkRuntime {
     }
 }
 
-#[typetag::serde]
+#[typetag::serde(name = "file")]
 #[async_trait]
 impl Sink for FileSinkConfig {
     fn clone_box(&self) -> Box<dyn Sink> {
