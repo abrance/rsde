@@ -69,7 +69,9 @@ pub struct EventMetadata {
 }
 
 /// 每份数据都是一个事件, 包含元数据和实际数据载荷
-pub trait Event: Send + Sync {
+pub trait Event: Send + Sync + std::fmt::Debug {
+    fn clone_box(&self) -> Box<dyn Event>;
+
     /// 获取事件元数据
     fn get_metadata(&self) -> &EventMetadata;
 
@@ -88,12 +90,23 @@ pub trait Event: Send + Sync {
     }
 }
 
+impl Clone for Box<dyn Event> {
+    fn clone(&self) -> Box<dyn Event> {
+        self.clone_box()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct SimpleEvent {
     pub metadata: EventMetadata,
     pub payload: Vec<u8>,
 }
 
 impl Event for SimpleEvent {
+    fn clone_box(&self) -> Box<dyn Event> {
+        Box::new(self.clone())
+    }
+
     fn get_metadata(&self) -> &EventMetadata {
         &self.metadata
     }

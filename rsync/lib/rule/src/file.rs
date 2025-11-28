@@ -431,9 +431,19 @@ pub struct FileSourceConfig {
     pub watch: bool, // 是否监听文件变化
 }
 
+impl FileSourceConfig {
+    pub fn new(path: String, watch: bool) -> Self {
+        Self { path, watch }
+    }
+}
+
 #[typetag::serde]
 #[async_trait]
 impl Source for FileSourceConfig {
+    fn clone_box(&self) -> Box<dyn Source> {
+        Box::new(self.clone())
+    }
+
     fn outputs(&self) -> Vec<SourceOutput> {
         vec![SourceOutput {
             output_id: "file_output".to_string(),
@@ -446,6 +456,7 @@ impl Source for FileSourceConfig {
             path: self.path.clone(),
             current_offset: 0,
             fd: std::fs::File::open(&self.path)?,
+            watch: self.watch,
         }))
     }
 
@@ -463,6 +474,7 @@ pub struct FileSourceRuntime {
     path: String,
     fd: std::fs::File,
     current_offset: u64,
+    watch: bool,
 }
 
 #[async_trait]
@@ -470,44 +482,51 @@ impl SourceRuntime for FileSourceRuntime {
     async fn next_event(&mut self) -> Result<Option<Box<dyn Event>>> {
         use std::io::{Read, Seek};
 
-        // 获取文件元数据
-        let metadata = self.fd.metadata()?;
+        loop {
+            // 获取文件元数据
+            let metadata = self.fd.metadata()?;
 
-        // 如果已经读到文件末尾，返回 None
-        if self.current_offset >= metadata.len() {
-            return Ok(None);
+            // 如果已经读到文件末尾
+            if self.current_offset >= metadata.len() {
+                if !self.watch {
+                    return Ok(None);
+                }
+                // 等待文件变化
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                continue;
+            }
+
+            // 计算本次要读取的字节数（最多 64KB）
+            const READ_SIZE: u64 = 64 * 1024;
+            let to_read = std::cmp::min(READ_SIZE, metadata.len() - self.current_offset);
+
+            // 读取数据
+            let payload = {
+                let mut buffer = vec![0u8; to_read as usize];
+                self.fd
+                    .seek(std::io::SeekFrom::Start(self.current_offset))?;
+                self.fd.read_exact(&mut buffer)?;
+                buffer
+            };
+
+            // 更新偏移量（增加实际读取的字节数）
+            self.current_offset += to_read;
+
+            // 返回事件
+            return Ok(Some(Box::new(SimpleEvent {
+                metadata: EventMetadata {
+                    id: format!("file-{}", self.current_offset),
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                    name: self.path.clone(),
+                    payload_size: payload.len(),
+                    event_type: EventType::Binary(BinaryType::Generic),
+                },
+                payload,
+            })));
         }
-
-        // 计算本次要读取的字节数（最多 64KB）
-        const READ_SIZE: u64 = 64 * 1024;
-        let to_read = std::cmp::min(READ_SIZE, metadata.len() - self.current_offset);
-
-        // 读取数据
-        let payload = {
-            let mut buffer = vec![0u8; to_read as usize];
-            self.fd
-                .seek(std::io::SeekFrom::Start(self.current_offset))?;
-            self.fd.read_exact(&mut buffer)?;
-            buffer
-        };
-
-        // 更新偏移量（增加实际读取的字节数）
-        self.current_offset += to_read;
-
-        // 返回事件
-        Ok(Some(Box::new(SimpleEvent {
-            metadata: EventMetadata {
-                id: format!("file-{}", self.current_offset),
-                timestamp: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-                name: self.path.clone(),
-                payload_size: payload.len(),
-                event_type: EventType::Binary(BinaryType::Generic),
-            },
-            payload,
-        })))
     }
 }
 
@@ -520,6 +539,10 @@ pub struct JsonTransformConfig {
 #[typetag::serde]
 #[async_trait]
 impl Transform for JsonTransformConfig {
+    fn clone_box(&self) -> Box<dyn Transform> {
+        Box::new(self.clone())
+    }
+
     async fn build(&self, _cx: TransformContext) -> Result<Box<dyn TransformRuntime>> {
         Ok(Box::new(JsonTransformRuntime {
             _add_timestamp: self.add_timestamp,
@@ -555,6 +578,10 @@ pub struct HttpSinkConfig {
 #[typetag::serde]
 #[async_trait]
 impl Sink for HttpSinkConfig {
+    fn clone_box(&self) -> Box<dyn Sink> {
+        Box::new(self.clone())
+    }
+
     async fn build(&self, _cx: SinkContext) -> Result<Box<dyn SinkRuntime>> {
         Ok(Box::new(HttpSinkRuntime {
             url: self.url.clone(),
@@ -626,6 +653,10 @@ impl SinkRuntime for FileSinkRuntime {
 #[typetag::serde]
 #[async_trait]
 impl Sink for FileSinkConfig {
+    fn clone_box(&self) -> Box<dyn Sink> {
+        Box::new(self.clone())
+    }
+
     async fn build(&self, _cx: SinkContext) -> Result<Box<dyn SinkRuntime>> {
         Ok(Box::new(FileSinkRuntime {
             env: self.env.clone(),
@@ -636,6 +667,17 @@ impl Sink for FileSinkConfig {
 
     fn sink_type(&self) -> &str {
         "file"
+    }
+}
+
+impl FileSinkConfig {
+    pub fn new(env: RsyncEnv, path: String, force: bool, mask: Option<String>) -> Self {
+        Self {
+            env,
+            path,
+            force,
+            mask,
+        }
     }
 }
 

@@ -1,3 +1,4 @@
+pub mod controller;
 pub mod event;
 pub mod file;
 pub mod platform_examples;
@@ -19,4 +20,4 @@ pub use rule::{
 };
 
 // 导出平台相关类型
-pub use file::{OsArchVersion, OsDistributionVesion, OsKernel, OsPlatform, RsyncEnv};
+pub use file::*;

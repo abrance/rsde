@@ -90,7 +90,9 @@ pub struct SinkContext {
 /// 负责从外部系统读取数据并转换为内部事件
 #[async_trait]
 #[typetag::serde(tag = "source_type")]
-pub trait Source: Send + Sync {
+pub trait Source: Send + Sync + fmt::Debug {
+    fn clone_box(&self) -> Box<dyn Source>;
+
     /// 获取数据源的输出配置列表
     /// 一个数据源可以有多个输出（例如：文件源可能输出多种类型的文件）
     fn outputs(&self) -> Vec<SourceOutput>;
@@ -107,6 +109,12 @@ pub trait Source: Send + Sync {
 
     /// 获取数据源类型的描述性名称
     fn source_type(&self) -> &str;
+}
+
+impl Clone for Box<dyn Source> {
+    fn clone(&self) -> Box<dyn Source> {
+        self.clone_box()
+    }
 }
 
 /// 运行时的数据源实例
@@ -132,12 +140,20 @@ pub trait SourceRuntime: Send + Sync {
 /// 负责对事件进行转换、过滤、富化等操作
 #[async_trait]
 #[typetag::serde(tag = "transform_type")]
-pub trait Transform: Send + Sync {
+pub trait Transform: Send + Sync + fmt::Debug {
+    fn clone_box(&self) -> Box<dyn Transform>;
+
     /// 构建转换器实例
     async fn build(&self, cx: TransformContext) -> Result<Box<dyn TransformRuntime>>;
 
     /// 获取转换器类型名称
     fn transform_type(&self) -> &str;
+}
+
+impl Clone for Box<dyn Transform> {
+    fn clone(&self) -> Box<dyn Transform> {
+        self.clone_box()
+    }
 }
 
 /// 运行时的转换器实例
@@ -153,12 +169,20 @@ pub trait TransformRuntime: Send + Sync {
 /// 负责将事件写入到外部系统
 #[async_trait]
 #[typetag::serde(tag = "sink_type")]
-pub trait Sink: Send + Sync {
+pub trait Sink: Send + Sync + fmt::Debug {
+    fn clone_box(&self) -> Box<dyn Sink>;
+
     /// 构建 Sink 实例
     async fn build(&self, cx: SinkContext) -> Result<Box<dyn SinkRuntime>>;
 
     /// 获取 Sink 类型名称
     fn sink_type(&self) -> &str;
+}
+
+impl Clone for Box<dyn Sink> {
+    fn clone(&self) -> Box<dyn Sink> {
+        self.clone_box()
+    }
 }
 
 /// 运行时的 Sink 实例
@@ -187,6 +211,7 @@ pub trait SinkRuntime: Send + Sync {
 }
 
 /// 数据传输管道的元数据
+#[derive(Clone, Debug)]
 pub struct DataTransferMetadata {
     pub id: String,
     pub name: String,
@@ -195,6 +220,7 @@ pub struct DataTransferMetadata {
 
 /// 数据传输管道配置
 /// 定义了一个完整的 Source -> Transform -> Sink 流程
+#[derive(Clone, Debug)]
 pub struct DataTransferConfig {
     pub metadata: DataTransferMetadata,
     /// 数据源配置列表（序列化存储）
@@ -203,4 +229,26 @@ pub struct DataTransferConfig {
     pub transforms: Vec<Box<dyn Transform>>,
     /// 目标配置列表
     pub sinks: Vec<Box<dyn Sink>>,
+}
+
+impl DataTransferConfig {
+    pub fn new(
+        id: String,
+        name: String,
+        description: Option<String>,
+        sources: Vec<Box<dyn Source>>,
+        transforms: Vec<Box<dyn Transform>>,
+        sinks: Vec<Box<dyn Sink>>,
+    ) -> Self {
+        Self {
+            metadata: DataTransferMetadata {
+                id,
+                name,
+                description,
+            },
+            sources,
+            transforms,
+            sinks,
+        }
+    }
 }
