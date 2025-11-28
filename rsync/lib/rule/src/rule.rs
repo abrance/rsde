@@ -1,129 +1,206 @@
-use core::Result;
+use crate::event::*;
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::fmt;
 
-/// 二进制数据的具体平台类型
-#[derive(Debug, Clone, PartialEq)]
-pub enum BinaryType {
-    Windows,
-    Linux,
-    Android,
-    MacOS,
-    iOS,
-    Generic, // 通用二进制数据
+/// 自定义错误类型
+#[derive(Debug, Clone)]
+pub enum RsyncError {
+    BuildError(String),
+    ReadError(String),
+    WriteError(String),
+    TransformError(String),
+    ConfigError(String),
 }
 
-/// 文本数据的具体格式类型
-#[derive(Debug, Clone, PartialEq)]
-pub enum TextType {
-    Markdown,
-    Yaml,
-    Json,
-    Toml,
-    Xml,
-    Csv,
-    PlainText, // 纯文本
-}
-
-/// 超文本数据的具体类型
-#[derive(Debug, Clone, PartialEq)]
-pub enum HyperTextType {
-    Html,
-    Jsx,
-    Vue,
-    Generic, // 通用超文本
-}
-
-/// 富文本数据的具体格式类型
-#[derive(Debug, Clone, PartialEq)]
-pub enum RichTextType {
-    Markdown,
-    Html,
-    Rtf,
-}
-
-/// 事件类型的层次化定义
-#[derive(Debug, Clone, PartialEq)]
-pub enum EventType {
-    Binary(BinaryType),       // 二进制数据及其子类型
-    Text(TextType),           // 文本数据及其子类型
-    HyperText(HyperTextType), // 超文本数据及其子类型
-    RichText(RichTextType),   // 富文本数据及其子类型
-}
-
-impl EventType {
-    /// 获取事件类型的字符串表示
-    pub fn as_str(&self) -> String {
+impl fmt::Display for RsyncError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EventType::Binary(bt) => format!("binary.{:?}", bt).to_lowercase(),
-            EventType::Text(tt) => format!("text.{:?}", tt).to_lowercase(),
-            EventType::HyperText(ht) => format!("hypertext.{:?}", ht).to_lowercase(),
-            EventType::RichText(rt) => format!("richtext.{:?}", rt).to_lowercase(),
+            RsyncError::BuildError(msg) => write!(f, "Build error: {}", msg),
+            RsyncError::ReadError(msg) => write!(f, "Read error: {}", msg),
+            RsyncError::WriteError(msg) => write!(f, "Write error: {}", msg),
+            RsyncError::TransformError(msg) => write!(f, "Transform error: {}", msg),
+            RsyncError::ConfigError(msg) => write!(f, "Config error: {}", msg),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct EventMetadata {
+impl std::error::Error for RsyncError {}
+
+// 从标准库 I/O 错误转换
+impl From<std::io::Error> for RsyncError {
+    fn from(err: std::io::Error) -> Self {
+        RsyncError::WriteError(err.to_string())
+    }
+}
+
+pub type Result<T> = std::result::Result<T, RsyncError>;
+
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Deserialize, Serialize)]
+pub struct ComponentKey {
     pub id: String,
-    pub timestamp: u64,
-    pub name: String,
-    pub payload_size: usize,
+}
+
+impl ComponentKey {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl From<String> for ComponentKey {
+    fn from(value: String) -> Self {
+        Self { id: value }
+    }
+}
+
+impl fmt::Display for ComponentKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.id.fmt(f)
+    }
+}
+
+/// 数据源输出配置
+#[derive(Debug, Clone)]
+pub struct SourceOutput {
+    pub output_id: String,
     pub event_type: EventType,
 }
 
-/// 每份数据都是一个事件, 包含元数据和实际数据载荷
-pub trait CEvent {
-    /// 获取事件元数据
-    fn get_metadata(&self) -> &EventMetadata;
-
-    /// 获取原始二进制载荷数据
-    /// 所有数据统一使用二进制格式存储，具体如何解释由 EventType 决定
-    fn get_payload(&self) -> &Vec<u8>;
-
-    /// 尝试将载荷解析为 UTF-8 字符串（适用于文本类型）
-    fn get_payload_as_text(&self) -> Option<String> {
-        String::from_utf8(self.get_payload().clone()).ok()
-    }
-
-    /// 获取载荷的引用（避免克隆）
-    fn get_payload_slice(&self) -> &[u8] {
-        self.get_payload().as_slice()
-    }
+/// 数据源上下文，包含构建和运行时所需的配置
+pub struct SourceContext {
+    pub key: ComponentKey,
+    pub acknowledgements: bool,
+    // 未来可扩展：
+    // pub shutdown_signal: ShutdownSignal,
+    // pub metrics: MetricsCollector,
 }
 
+/// Transform 上下文
+pub struct TransformContext {
+    pub key: ComponentKey,
+}
+
+/// Sink 上下文
+pub struct SinkContext {
+    pub key: ComponentKey,
+    pub acknowledgements: bool,
+}
+
+/// Source trait - 数据源抽象
+/// 负责从外部系统读取数据并转换为内部事件
+#[async_trait]
 #[typetag::serde(tag = "source_type")]
-pub trait CSource {
+pub trait Source: Send + Sync {
+    /// 获取数据源的输出配置列表
+    /// 一个数据源可以有多个输出（例如：文件源可能输出多种类型的文件）
     fn outputs(&self) -> Vec<SourceOutput>;
 
-    // build 用于构建数据源实例
-    async fn build(&self, cx: SourceContext) -> Result<Source>;
+    /// 构建并启动数据源
+    /// 返回一个运行中的数据源句柄
+    async fn build(&self, cx: SourceContext) -> Result<Box<dyn SourceRuntime>>;
 
-    // can_acknowledge 用于指示数据源是否支持确认机制,如消息队列的 ACK
-    fn can_acknowledge(&self) -> bool;
+    /// 指示数据源是否支持确认机制
+    /// 例如：Kafka 消费者可以 ACK 消息，文件源则不需要
+    fn can_acknowledge(&self) -> bool {
+        false
+    }
+
+    /// 获取数据源类型的描述性名称
+    fn source_type(&self) -> &str;
 }
 
+/// 运行时的数据源实例
+/// 将配置(Source)与运行时状态分离
+#[async_trait]
+pub trait SourceRuntime: Send + Sync {
+    /// 从数据源读取下一个事件
+    /// 返回 None 表示数据源已耗尽（如文件读完）
+    async fn next_event(&mut self) -> Result<Option<Box<dyn Event>>>;
+
+    /// 确认事件已被成功处理（仅当 can_acknowledge 为 true 时有效）
+    async fn acknowledge(&mut self, _event_id: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// 优雅关闭数据源
+    async fn shutdown(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// Transform trait - 数据转换抽象
+/// 负责对事件进行转换、过滤、富化等操作
+#[async_trait]
 #[typetag::serde(tag = "transform_type")]
-pub trait CTransform {
-    fn build(&self, cx: TransformContext) -> Result<Transform>;
+pub trait Transform: Send + Sync {
+    /// 构建转换器实例
+    async fn build(&self, cx: TransformContext) -> Result<Box<dyn TransformRuntime>>;
 
-    fn process(&self, data: CEvent) -> Result<CEvent>;
+    /// 获取转换器类型名称
+    fn transform_type(&self) -> &str;
 }
 
+/// 运行时的转换器实例
+#[async_trait]
+pub trait TransformRuntime: Send + Sync {
+    /// 处理单个事件
+    /// 返回转换后的事件，可能返回 None（过滤掉事件）
+    /// 或返回多个事件（一对多转换）
+    async fn process(&mut self, event: Box<dyn Event>) -> Result<Vec<Box<dyn Event>>>;
+}
+
+/// Sink trait - 数据目的地抽象
+/// 负责将事件写入到外部系统
+#[async_trait]
 #[typetag::serde(tag = "sink_type")]
-pub trait CSink {
-    fn build(&self, cx: SinkContext) -> Result<Sink>;
+pub trait Sink: Send + Sync {
+    /// 构建 Sink 实例
+    async fn build(&self, cx: SinkContext) -> Result<Box<dyn SinkRuntime>>;
 
-    fn write(&self, data: CEvent) -> Result<()>;
+    /// 获取 Sink 类型名称
+    fn sink_type(&self) -> &str;
 }
 
+/// 运行时的 Sink 实例
+#[async_trait]
+pub trait SinkRuntime: Send + Sync {
+    /// 写入单个事件
+    async fn write(&mut self, event: Box<dyn Event>) -> Result<()>;
+
+    /// 批量写入事件（可选优化）
+    async fn write_batch(&mut self, events: Vec<Box<dyn Event>>) -> Result<()> {
+        for event in events {
+            self.write(event).await?;
+        }
+        Ok(())
+    }
+
+    /// 刷新缓冲区，确保数据被写入
+    async fn flush(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// 优雅关闭
+    async fn shutdown(&mut self) -> Result<()> {
+        self.flush().await
+    }
+}
+
+/// 数据传输管道的元数据
 pub struct DataTransferMetadata {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
 }
 
+/// 数据传输管道配置
+/// 定义了一个完整的 Source -> Transform -> Sink 流程
 pub struct DataTransferConfig {
     pub metadata: DataTransferMetadata,
-    pub sources: Vec<Arc<Mutex<dyn CSource>>>,
-    pub transforms: Vec<Arc<Mutex<dyn CTransform>>>,
-    pub sinks: Vec<Arc<Mutex<dyn CSink>>>,
+    /// 数据源配置列表（序列化存储）
+    pub sources: Vec<Box<dyn Source>>,
+    /// 转换器配置列表
+    pub transforms: Vec<Box<dyn Transform>>,
+    /// 目标配置列表
+    pub sinks: Vec<Box<dyn Sink>>,
 }
