@@ -468,15 +468,33 @@ pub struct FileSourceRuntime {
 #[async_trait]
 impl SourceRuntime for FileSourceRuntime {
     async fn next_event(&mut self) -> Result<Option<Box<dyn Event>>> {
-        // 如果 offset 大于 file size
+        use std::io::{Read, Seek};
+
+        // 获取文件元数据
         let metadata = self.fd.metadata()?;
-        if self.current_offset > metadata.len() {
-            return Ok(None); // 文件已读完
+
+        // 如果已经读到文件末尾，返回 None
+        if self.current_offset >= metadata.len() {
+            return Ok(None);
         }
 
-        self.current_offset += 1;
+        // 计算本次要读取的字节数（最多 64KB）
+        const READ_SIZE: u64 = 64 * 1024;
+        let to_read = std::cmp::min(READ_SIZE, metadata.len() - self.current_offset);
 
-        // 返回一个示例事件
+        // 读取数据
+        let payload = {
+            let mut buffer = vec![0u8; to_read as usize];
+            self.fd
+                .seek(std::io::SeekFrom::Start(self.current_offset))?;
+            self.fd.read_exact(&mut buffer)?;
+            buffer
+        };
+
+        // 更新偏移量（增加实际读取的字节数）
+        self.current_offset += to_read;
+
+        // 返回事件
         Ok(Some(Box::new(SimpleEvent {
             metadata: EventMetadata {
                 id: format!("file-{}", self.current_offset),
@@ -485,10 +503,10 @@ impl SourceRuntime for FileSourceRuntime {
                     .unwrap()
                     .as_secs(),
                 name: self.path.clone(),
-                payload_size: 0,
-                event_type: EventType::Text(TextType::PlainText),
+                payload_size: payload.len(),
+                event_type: EventType::Binary(BinaryType::Generic),
             },
-            payload: b"file content".to_vec(),
+            payload,
         })))
     }
 }
