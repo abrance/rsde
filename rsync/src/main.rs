@@ -9,8 +9,9 @@ async fn main() {
     // 启动文件监听器
     let controller_clone = controller.clone();
     tokio::spawn(async move {
-        println!("Starting file watcher in current directory...");
-        let mut watcher = RuleFileWatcher::new(controller_clone, ".".to_string());
+        let watch_dir = std::env::var("RSYNC_CONFIG_DIR").unwrap_or_else(|_| ".".to_string());
+        println!("Starting file watcher in directory: {}", watch_dir);
+        let mut watcher = RuleFileWatcher::new(controller_clone, watch_dir);
         watcher.run().await;
     });
 
