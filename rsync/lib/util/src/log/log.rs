@@ -1,6 +1,6 @@
-use tracing::{Level, error, info, span, subscriber, warn};
+use tracing::{error, info, span, subscriber, warn, Level};
 use tracing_appender::{non_blocking, rolling};
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing_subscriber::{fmt, EnvFilter};
 
 #[derive(Debug)]
 pub struct LogConfig {
@@ -8,7 +8,8 @@ pub struct LogConfig {
     pub file_path: Option<String>,
 }
 
-const LOG_FILE_NAME: &str = "conquer.log";
+const LOG_FILE_NAME: &str = "rsync.log";
+const LOG_DIR_NAME: &str = "./log";
 
 pub fn setup(config: LogConfig) {
     // 设置日志级别
@@ -20,7 +21,7 @@ pub fn setup(config: LogConfig) {
         _ => println!("Unknown log level, defaulting to INFO"),
     }
 
-    let log_dir_path = String::from("./log");
+    let log_dir_path = String::from(LOG_DIR_NAME);
     if let Some(file_path) = config.file_path {
         println!("Log file path set to: {}", file_path);
     } else {

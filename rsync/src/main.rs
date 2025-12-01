@@ -1,10 +1,21 @@
 use rule::{controller::Controller, rule_file_watch::RuleFileWatcher};
+use std;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use util::log::info;
+use tracing::info;
+use util::log::{setup, LogConfig};
 
 #[tokio::main]
 async fn main() {
+    let log_config = LogConfig {
+        level: if std::env::var("DEBUG").is_ok() {
+            "debug".to_string()
+        } else {
+            "info".to_string()
+        },
+        file_path: None,
+    };
+    setup(log_config);
     let controller = Arc::new(Mutex::new(Controller::new()));
 
     // 启动文件监听器

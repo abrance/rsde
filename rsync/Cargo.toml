@@ -6,7 +6,8 @@ edition.workspace = true
 [dependencies]
 rule = { path = "lib/rule" }
 util = { path = "lib/util" }
-tokio.workspace = true
+tokio = { workspace = true }
+tracing = { workspace = true }
 
 [workspace]
 members = ["lib/core", "lib/rule", "lib/util"]
@@ -24,6 +25,13 @@ toml = "0.9.8"
 anyhow = "1.0"
 async-trait = "0.1"
 log = "0.4"
+tracing = { version = "0.1", features = ["log-always", "max_level_debug"] }
+tracing-subscriber = { version = "0.3", features = [
+    "env-filter",
+    "json",
+    "serde_json",
+] }
+tracing-appender = "0.2"
 
 [[bin]]
 name = "rsync"
