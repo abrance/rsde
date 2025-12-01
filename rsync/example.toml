@@ -16,9 +16,4 @@ add_timestamp = true
 sink_type = "file"
 path = "/tmp/toml_output.txt"
 force = true
-
-[sinks.env.platform]
-kernel = "Linux"
-arch = "X86_64"
-[sinks.env.platform.distribution]
-Unknown = {}
+env = { platform = { kernel = "Linux", arch = "X86_64", distribution = "Unknown" } }

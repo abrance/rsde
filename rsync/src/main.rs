@@ -1,6 +1,7 @@
 use rule::{controller::Controller, rule_file_watch::RuleFileWatcher};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use util::log::info;
 
 #[tokio::main]
 async fn main() {
@@ -10,14 +11,14 @@ async fn main() {
     let controller_clone = controller.clone();
     tokio::spawn(async move {
         let watch_dir = std::env::var("RSYNC_CONFIG_DIR").unwrap_or_else(|_| ".".to_string());
-        println!("Starting file watcher in directory: {watch_dir}");
+        info!("Starting file watcher in directory: {watch_dir}");
         let mut watcher = RuleFileWatcher::new(controller_clone, watch_dir);
         watcher.run().await;
     });
 
     // Keep the main thread alive to let the controller run
-    println!("Rsync service running... Waiting for config files in current directory.");
-    println!("Press Ctrl+C to stop.");
+    info!("Rsync service running... Waiting for config files in current directory.");
+    info!("Press Ctrl+C to stop.");
     tokio::signal::ctrl_c().await.unwrap();
-    println!("Shutdown signal received");
+    info!("Shutdown signal received");
 }
