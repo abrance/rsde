@@ -51,10 +51,10 @@ impl EventType {
     /// 获取事件类型的字符串表示
     pub fn as_str(&self) -> String {
         match self {
-            EventType::Binary(bt) => format!("binary.{:?}", bt).to_lowercase(),
-            EventType::Text(tt) => format!("text.{:?}", tt).to_lowercase(),
-            EventType::HyperText(ht) => format!("hypertext.{:?}", ht).to_lowercase(),
-            EventType::RichText(rt) => format!("richtext.{:?}", rt).to_lowercase(),
+            EventType::Binary(bt) => format!("binary.{bt:?}").to_lowercase(),
+            EventType::Text(tt) => format!("text.{tt:?}").to_lowercase(),
+            EventType::HyperText(ht) => format!("hypertext.{ht:?}").to_lowercase(),
+            EventType::RichText(rt) => format!("richtext.{rt:?}").to_lowercase(),
         }
     }
 }

@@ -8,6 +8,12 @@ pub struct Controller {
     tasks: HashMap<String, JoinHandle<()>>,
 }
 
+impl Default for Controller {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Controller {
     pub fn new() -> Self {
         Self {
@@ -23,7 +29,7 @@ impl Controller {
 
         // 1. 构建并启动 Sources
         for (index, source_config) in config.sources.iter().enumerate() {
-            let source_id = format!("{}-source-{}", pipeline_id, index);
+            let source_id = format!("{pipeline_id}-source-{index}");
             let cx = SourceContext {
                 key: ComponentKey::from(source_id.clone()),
                 acknowledgements: source_config.can_acknowledge(),
@@ -42,7 +48,7 @@ impl Controller {
                         }
                         Ok(None) => break, // Source exhausted
                         Err(e) => {
-                            eprintln!("Source error in {}: {}", source_id, e);
+                            eprintln!("Source error in {source_id}: {e}");
                             // 简单的错误处理：暂停一下
                             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                         }
@@ -57,7 +63,7 @@ impl Controller {
         // 2. 构建 Transforms
         let mut transform_runtimes = Vec::new();
         for (index, transform_config) in config.transforms.iter().enumerate() {
-            let transform_id = format!("{}-transform-{}", pipeline_id, index);
+            let transform_id = format!("{pipeline_id}-transform-{index}");
             let cx = TransformContext {
                 key: ComponentKey::from(transform_id),
             };
@@ -68,7 +74,7 @@ impl Controller {
         // 3. 构建 Sinks
         let mut sink_runtimes = Vec::new();
         for (index, sink_config) in config.sinks.iter().enumerate() {
-            let sink_id = format!("{}-sink-{}", pipeline_id, index);
+            let sink_id = format!("{pipeline_id}-sink-{index}");
             let cx = SinkContext {
                 key: ComponentKey::from(sink_id),
                 acknowledgements: false, // 简化
@@ -88,7 +94,7 @@ impl Controller {
                     for e in events {
                         match transform.process(e).await {
                             Ok(processed) => next_events.extend(processed),
-                            Err(err) => eprintln!("Transform error: {}", err),
+                            Err(err) => eprintln!("Transform error: {err}"),
                         }
                     }
                     events = next_events;
@@ -104,14 +110,14 @@ impl Controller {
                     for i in 0..sink_runtimes.len() - 1 {
                         let event_clone = event.clone();
                         if let Err(e) = sink_runtimes[i].write(event_clone).await {
-                            eprintln!("Sink write error: {}", e);
+                            eprintln!("Sink write error: {e}");
                         }
                     }
 
                     // 处理最后一个 sink
                     if let Some(last_sink) = sink_runtimes.last_mut() {
                         if let Err(e) = last_sink.write(event).await {
-                            eprintln!("Sink write error: {}", e);
+                            eprintln!("Sink write error: {e}");
                         }
                     }
                 }

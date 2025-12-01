@@ -642,7 +642,7 @@ impl SinkRuntime for FileSinkRuntime {
     async fn write(&mut self, event: Box<dyn Event>) -> Result<()> {
         let payload = event.get_payload();
 
-        if let Err(e) = self.fd.write_all(&payload) {
+        if let Err(e) = self.fd.write_all(payload) {
             return Err(e.into());
         }
         self.current_offset += payload.len() as u64;

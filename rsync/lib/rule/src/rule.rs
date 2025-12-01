@@ -16,11 +16,11 @@ pub enum RsyncError {
 impl fmt::Display for RsyncError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RsyncError::BuildError(msg) => write!(f, "Build error: {}", msg),
-            RsyncError::ReadError(msg) => write!(f, "Read error: {}", msg),
-            RsyncError::WriteError(msg) => write!(f, "Write error: {}", msg),
-            RsyncError::TransformError(msg) => write!(f, "Transform error: {}", msg),
-            RsyncError::ConfigError(msg) => write!(f, "Config error: {}", msg),
+            RsyncError::BuildError(msg) => write!(f, "Build error: {msg}"),
+            RsyncError::ReadError(msg) => write!(f, "Read error: {msg}"),
+            RsyncError::WriteError(msg) => write!(f, "Write error: {msg}"),
+            RsyncError::TransformError(msg) => write!(f, "Transform error: {msg}"),
+            RsyncError::ConfigError(msg) => write!(f, "Config error: {msg}"),
         }
     }
 }
