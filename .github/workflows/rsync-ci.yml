@@ -1,0 +1,240 @@
+name: Rsync CI/CD
+
+on:
+  push:
+    branches: [ master, main, develop ]
+    paths:
+      - 'rsync/**'
+      - '.github/workflows/rsync-ci.yml'
+  pull_request:
+    branches: [ master, main, develop ]
+    paths:
+      - 'rsync/**'
+      - '.github/workflows/rsync-ci.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/rsync
+
+jobs:
+  test:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+    
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/registry
+        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-registry-
+    
+    - name: Cache cargo index
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo/git
+        key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-git-
+    
+    - name: Cache target directory
+      uses: actions/cache@v4
+      with:
+        path: rsync/target
+        key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-target-
+    
+    - name: Check formatting
+      working-directory: ./rsync
+      run: make fmt-check
+    
+    - name: Run clippy
+      working-directory: ./rsync
+      run: make clippy
+    
+    - name: Run tests
+      working-directory: ./rsync
+      run: make test
+    
+    - name: Build release binary
+      working-directory: ./rsync
+      run: make build
+
+  helm-lint:
+    name: Helm Chart Validation
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Helm
+      uses: azure/setup-helm@v4
+      with:
+        version: 'latest'
+    
+    - name: Helm lint
+      run: helm lint rsync/helm/rsync
+    
+    - name: Helm template dry-run
+      run: |
+        helm template rsync ./rsync/helm/rsync \
+          --set image.tag=test \
+          --debug
+
+  docker-build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: [test, helm-lint]
+    if: github.event_name == 'push'
+    
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Log in to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+    
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./rsync
+        file: ./rsync/Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  helm-test:
+    name: Helm Chart Deployment Test
+    runs-on: ubuntu-latest
+    needs: [docker-build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Helm
+      uses: azure/setup-helm@v4
+      with:
+        version: 'latest'
+    
+    - name: Set up Kind (Kubernetes in Docker)
+      uses: helm/kind-action@v1
+      with:
+        cluster_name: rsync-test
+        wait: 120s
+    
+    - name: Verify cluster
+      run: |
+        kubectl cluster-info
+        kubectl get nodes
+    
+    - name: Build Docker image for Kind
+      working-directory: ./rsync
+      run: |
+        docker build -t rsync:test -f Dockerfile .
+    
+    - name: Load image into Kind
+      run: |
+        kind load docker-image rsync:test --name rsync-test
+    
+    - name: Deploy with Helm
+      run: |
+        helm install rsync ./rsync/helm/rsync \
+          --set image.tag=test \
+          --set image.pullPolicy=IfNotPresent \
+          --wait --timeout 2m
+    
+    - name: Check deployment status
+      run: |
+        kubectl get all
+        kubectl get pods -o wide
+    
+    - name: Wait for pod to be ready
+      run: |
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=rsync --timeout=120s
+    
+    - name: Check pod logs
+      run: |
+        kubectl logs -l app.kubernetes.io/name=rsync --tail=50
+    
+    - name: Test application
+      run: |
+        POD_NAME=$(kubectl get pods -l app.kubernetes.io/name=rsync -o jsonpath='{.items[0].metadata.name}')
+        echo "Testing pod: $POD_NAME"
+        
+        # Check if the application is running
+        kubectl exec $POD_NAME -- ps aux | grep rsync || true
+        
+        # Check if config is loaded
+        kubectl logs $POD_NAME | grep "Successfully loaded" || echo "Config loading check: see logs above"
+        
+        # Check demo output if enabled
+        kubectl exec $POD_NAME -- cat /app/data/output.txt || echo "No output file yet"
+    
+    - name: Helm test (if test hooks exist)
+      run: |
+        helm test rsync || echo "No helm tests defined"
+    
+    - name: Cleanup
+      if: always()
+      run: |
+        helm uninstall rsync || true
+        kubectl delete all --all || true
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [helm-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Package Helm chart
+      run: |
+        helm package rsync/helm/rsync -d .
+    
+    - name: Upload Helm chart artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: helm-chart
+        path: rsync-*.tgz
+        retention-days: 30

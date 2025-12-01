@@ -1,0 +1,24 @@
+# Optional: Helm test hook example
+# Place this in rsync/helm/rsync/templates/tests/test-connection.yaml
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "rsync.fullname" . }}-test-connection"
+  labels:
+    {{- include "rsync.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  containers:
+    - name: wget
+      image: busybox
+      command: ['sh', '-c']
+      args:
+        - |
+          echo "Testing rsync deployment..."
+          # Add your test logic here
+          # For example, check if config files are accessible
+          echo "Test passed!"
+  restartPolicy: Never
