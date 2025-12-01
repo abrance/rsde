@@ -1,2 +1,2 @@
-pub mod log;
-pub use log::*;
+pub mod logger;
+pub use logger::*;

@@ -1,5 +1,4 @@
 use rule::{controller::Controller, rule_file_watch::RuleFileWatcher};
-use std;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::info;

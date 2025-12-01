@@ -23,9 +23,9 @@ pub fn setup(config: LogConfig) {
 
     let log_dir_path = String::from(LOG_DIR_NAME);
     if let Some(file_path) = config.file_path {
-        println!("Log file path set to: {}", file_path);
+        println!("Log file path set to: {file_path}",);
     } else {
-        println!("Using default log directory: {}", log_dir_path);
+        println!("Using default log directory: {log_dir_path}",);
     }
 
     // 设置默认的 Subscriber （输出到 stdout）
