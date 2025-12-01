@@ -684,12 +684,24 @@ impl FileSinkConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[tokio::test]
     async fn test_pipeline() {
+        // 创建临时文件用于测试
+        let temp_dir = std::env::temp_dir();
+        let input_path = temp_dir.join("test_input.txt");
+        let output_path = temp_dir.join("test_output.txt");
+
+        // 写入测试数据
+        let mut file = std::fs::File::create(&input_path).unwrap();
+        writeln!(file, "test line 1").unwrap();
+        writeln!(file, "test line 2").unwrap();
+        drop(file);
+
         // 1. 创建配置
         let source_config = FileSourceConfig {
-            path: "/path/to/file".to_string(),
+            path: input_path.to_string_lossy().to_string(),
             watch: false,
         };
 
@@ -697,9 +709,11 @@ mod tests {
             add_timestamp: true,
         };
 
-        let sink_config = HttpSinkConfig {
-            url: "http://example.com/api".to_string(),
-            batch_size: 10,
+        let sink_config = FileSinkConfig {
+            path: output_path.to_string_lossy().to_string(),
+            force: true,
+            mask: None,
+            env: RsyncEnv::detect(),
         };
 
         // 2. 构建运行时实例
@@ -739,5 +753,12 @@ mod tests {
 
         // 4. 清理
         sink.shutdown().await.unwrap();
+
+        // 验证输出文件存在
+        assert!(output_path.exists());
+
+        // 清理测试文件
+        let _ = std::fs::remove_file(&input_path);
+        let _ = std::fs::remove_file(&output_path);
     }
 }
