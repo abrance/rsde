@@ -2,6 +2,7 @@ use crate::event::*;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use uuid::Uuid;
 
 /// 自定义错误类型
 #[derive(Debug, Clone)]
@@ -37,23 +38,53 @@ impl From<std::io::Error> for RsyncError {
 pub type Result<T> = std::result::Result<T, RsyncError>;
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug, Deserialize, Serialize)]
-pub struct ComponentKey {
-    pub id: String,
+pub struct ComponentKey<T = String> {
+    pub id: T,
 }
 
-impl ComponentKey {
-    pub fn id(&self) -> &str {
+impl<T> ComponentKey<T> {
+    pub fn id(&self) -> &T {
         &self.id
     }
 }
 
-impl From<String> for ComponentKey {
+/// 默认情况下，`ComponentKey` 使用 `String` 作为内部 ID`，
+/// 因此既可以存放普通字符串，也可以存放 UUID 的字符串表示。
+impl From<String> for ComponentKey<String> {
     fn from(value: String) -> Self {
         Self { id: value }
     }
 }
 
-impl fmt::Display for ComponentKey {
+impl From<&str> for ComponentKey<String> {
+    fn from(value: &str) -> Self {
+        Self {
+            id: value.to_owned(),
+        }
+    }
+}
+
+/// 直接使用 `Uuid` 作为组件 ID。
+///
+/// `uuid::Uuid` 在启用 `serde` feature 后，序列化/反序列化默认就是
+/// 字符串形式（例如 `"550e8400-e29b-41d4-a716-446655440000"`），
+/// 满足“保存为 string”的需求。
+impl From<Uuid> for ComponentKey<Uuid> {
+    fn from(value: Uuid) -> Self {
+        Self { id: value }
+    }
+}
+
+impl From<&Uuid> for ComponentKey<Uuid> {
+    fn from(value: &Uuid) -> Self {
+        Self { id: *value }
+    }
+}
+
+impl<T> fmt::Display for ComponentKey<T>
+where
+    T: fmt::Display,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.id.fmt(f)
     }

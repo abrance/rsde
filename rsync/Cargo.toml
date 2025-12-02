@@ -32,6 +32,7 @@ tracing-subscriber = { version = "0.3", features = [
     "serde_json",
 ] }
 tracing-appender = "0.2"
+uuid = { version = "1.9", features = ["serde", "v4"] }
 
 [[bin]]
 name = "rsync"
