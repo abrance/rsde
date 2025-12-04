@@ -1,8 +1,0 @@
-# Kafka Python Client Dependencies
-# Install with: pip install -r requirements.txt
-
-# Main Kafka client library
-kafka-python==2.0.2
-
-# Optional: For better performance and additional features
-# confluent-kafka==2.3.0

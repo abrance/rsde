@@ -1,0 +1,29 @@
+[workspace]
+members = [
+    "rsync",
+    "rc",
+    "common/*",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+typetag = "0.2.21"
+toml = "0.9.8"
+anyhow = "1.0"
+async-trait = "0.1"
+log = "0.4"
+tracing = { version = "0.1", features = ["log-always", "max_level_debug"] }
+tracing-subscriber = { version = "0.3", features = [
+    "env-filter",
+    "json",
+    "serde_json",
+] }
+tracing-appender = "0.2"
+uuid = { version = "1.9", features = ["serde", "v4"] }
