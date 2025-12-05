@@ -19,3 +19,28 @@ rc 目的是开发一个远程测试一些中间件连接功能的工具。
 - 读写数据
 
 每个阶段会有独立的超时设置。
+
+
+## 预计组件
+
+Protocols:
+- PureTCP
+- HTTP
+- SSH
+- FTP
+- SFTP
+
+Databases:
+- PostgreSQL
+- MySQL
+- Redis
+- MongoDB
+- ES
+- Doris
+- InfluxDB
+- VictoriaMetrics
+- ClickHouse
+
+Message Queues:
+- RabbitMQ
+- Kafka
