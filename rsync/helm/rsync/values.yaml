@@ -93,3 +93,8 @@ persistence:
   # accessModes:
   #   - ReadWriteOnce
   # size: 1Gi
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 80

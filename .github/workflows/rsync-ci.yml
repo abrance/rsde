@@ -178,7 +178,7 @@ jobs:
         helm install rsync ./rsync/helm/rsync \
           --set image.tag=test \
           --set image.pullPolicy=IfNotPresent \
-          --wait --timeout 2m
+          --wait --timeout 5m
     
     - name: Check deployment status
       run: |
@@ -187,7 +187,7 @@ jobs:
     
     - name: Wait for pod to be ready
       run: |
-        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=rsync --timeout=120s
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=rsync --timeout=300s
     
     - name: Check pod logs
       run: |

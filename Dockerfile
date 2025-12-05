@@ -22,5 +22,5 @@ COPY --from=builder /usr/src/app/bin/apiserver /usr/local/bin/apiserver
 # Set the working directory
 WORKDIR /app
 
-# Run the apiserver by default
-CMD ["apiserver"]
+# Run the rsync service by default
+CMD ["rsync"]
