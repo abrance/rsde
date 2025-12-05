@@ -483,10 +483,10 @@ Download the appropriate tarball for your platform:
 
 #### Multi-stage Dockerfile
 ```dockerfile
-FROM rust:1.83 as builder
+FROM rust:1.83 AS builder
 # 构建阶段
 
-FROM debian:bookworm-slim  
+FROM debian:bookworm-slim
 # 运行时阶段
 ```
 

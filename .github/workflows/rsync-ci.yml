@@ -131,8 +131,8 @@ jobs:
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:
-        context: ./rsync
-        file: ./rsync/Dockerfile
+        context: .
+        file: ./Dockerfile
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
@@ -166,7 +166,6 @@ jobs:
         kubectl get nodes
     
     - name: Build Docker image for Kind
-      working-directory: ./rsync
       run: |
         docker build -t rsync:test -f Dockerfile .
     

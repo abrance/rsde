@@ -1,0 +1,8 @@
+[package]
+name = "webserver"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+util = { path = "../common/util" }
+core = { path = "../common/core" }

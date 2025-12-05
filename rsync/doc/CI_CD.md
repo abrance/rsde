@@ -40,7 +40,7 @@ The CI/CD pipeline (`rsync-ci.yml`) is triggered on:
 **Triggers**: Only on push events (not PRs)
 
 **Steps**:
-- Build Docker image using rsync/Dockerfile
+- Build Docker image using Dockerfile from project root
 - Push to `ghcr.io/<owner>/<repo>/rsync`
 - Tag with branch name, commit SHA, and `latest` (for default branch)
 

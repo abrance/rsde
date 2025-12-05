@@ -48,7 +48,7 @@ run-with-config:
 
 # Build Docker image
 docker-build:
-	docker build -t rsync:latest -f Dockerfile .
+	docker build -t rsync:latest -f ../Dockerfile .
 
 # Tag and push Docker image
 docker-push: docker-build

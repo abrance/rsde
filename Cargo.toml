@@ -2,7 +2,7 @@
 members = [
     "rsync",
     "rc",
-    "common/*",
+    "common/*", "webserver", "apiserver",
 ]
 resolver = "2"
 
