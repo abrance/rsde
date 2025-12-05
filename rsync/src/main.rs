@@ -1,11 +1,6 @@
-use axum::{
-    routing::get,
-    Router,
-    response::Json,
-    http::StatusCode,
-};
+use axum::{http::StatusCode, response::Json, routing::get, Router};
 use rule::{controller::Controller, rule_file_watch::RuleFileWatcher};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::info;
@@ -38,8 +33,7 @@ async fn main() {
     });
 
     // 启动 HTTP 服务
-    let app = Router::new()
-        .route("/health", get(health_check));
+    let app = Router::new().route("/health", get(health_check));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
         .await
