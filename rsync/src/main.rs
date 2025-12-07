@@ -9,6 +9,7 @@ use util::log::setup;
 
 const DEFAULT_CONFIG_FILE_LIST: [&str; 3] = ["config.toml", "rsync.toml", "example.toml"];
 
+const DEFAULT_LISTEN_ADDR: &str = "0.0.0.0:8080";
 async fn health_check() -> (StatusCode, Json<Value>) {
     (StatusCode::OK, Json(json!({ "status": "healthy" })))
 }
@@ -42,7 +43,7 @@ async fn main() {
     // 启动 HTTP 服务
     let app = Router::new().route("/health", get(health_check));
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
+    let listener = tokio::net::TcpListener::bind(DEFAULT_LISTEN_ADDR)
         .await
         .expect("Failed to bind to port 8080");
 
