@@ -1,0 +1,15 @@
+[metadata]
+id = "test-pipeline"
+name = "Test Pipeline"
+description = "A test pipeline for the new configuration mechanism"
+
+[global]
+debug = true
+
+[api]
+listen_address = "0.0.0.0:8080"
+log_level = "debug"
+metrics_enabled = true
+
+[log]
+path = "./test_logs/"

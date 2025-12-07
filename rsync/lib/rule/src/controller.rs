@@ -22,7 +22,13 @@ impl Controller {
     }
 
     pub async fn add_config(&mut self, config: DataTransferConfig) -> Result<()> {
-        let pipeline_id = config.metadata.id.clone();
+        // 检查 metadata 是否存在
+        let metadata = match &config.metadata {
+            Some(metadata) => metadata,
+            None => return Err(RsyncError::ConfigError("Missing metadata in config".to_string())),
+        };
+
+        let pipeline_id = metadata.id.clone();
 
         // 创建通道，用于连接 Source 和 Sink
         let (tx, mut rx) = mpsc::channel::<Box<dyn Event>>(100);

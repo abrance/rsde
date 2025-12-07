@@ -1,0 +1,14 @@
+[[sources]]
+source_type = "file"
+path = "/tmp/test_input.txt"
+watch = true
+
+[[transforms]]
+transform_type = "json"
+add_timestamp = true
+
+[[sinks]]
+sink_type = "file"
+path = "/tmp/test_output.txt"
+force = true
+env = { platform = { kernel = "Linux", arch = "X86_64", distribution = "Unknown" } }

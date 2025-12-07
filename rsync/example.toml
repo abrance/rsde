@@ -17,3 +17,14 @@ sink_type = "file"
 path = "/tmp/toml_output.txt"
 force = true
 env = { platform = { kernel = "Linux", arch = "X86_64", distribution = "Unknown" } }
+
+[api]
+listen_address = "0.0.0.0:8080"
+log_level = "debug"
+metrics_enabled = true
+
+[global]
+debug = true
+
+[log]
+path = "./log/"

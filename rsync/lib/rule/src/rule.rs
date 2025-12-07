@@ -35,6 +35,13 @@ impl From<std::io::Error> for RsyncError {
     }
 }
 
+// 从 TOML 解析错误转换
+impl From<toml::de::Error> for RsyncError {
+    fn from(err: toml::de::Error) -> Self {
+        RsyncError::ConfigError(err.to_string())
+    }
+}
+
 pub type Result<T> = std::result::Result<T, RsyncError>;
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug, Deserialize, Serialize)]
@@ -249,11 +256,67 @@ pub struct DataTransferMetadata {
     pub description: Option<String>,
 }
 
+/// global 全局配置
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+pub struct GlobalConfig {
+    #[serde(default)]
+    pub debug: bool,
+}
+
+
+/// api API 服务配置
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+pub struct ApiConfig {
+    #[serde(default = "default_listen_address")]
+    pub listen_address: String,
+    #[serde(default = "default_log_level")]
+    pub log_level: String,
+    #[serde(default)]
+    pub metrics_enabled: bool,
+}
+
+fn default_listen_address() -> String {
+    "0.0.0.0:8080".to_string()
+}
+
+fn default_log_level() -> String {
+    "info".to_string()
+}
+
+/// log 日志配置
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+pub struct LogConfig {
+    #[serde(default = "default_log_path")]
+    pub path: String,
+}
+
+fn default_log_path() -> String {
+    "./log/".to_string()
+}
+
+/// 全局配置结构体，用于存储全局设置（metadata, api, global, log）
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+pub struct GlobalConfigData {
+    pub metadata: Option<DataTransferMetadata>,
+    pub global: GlobalConfig,
+    pub api: ApiConfig,
+    pub log: LogConfig,
+}
+
+impl GlobalConfigData {
+    pub fn from_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
+        let content = std::fs::read_to_string(path)?;
+        let config: Self = toml::from_str(&content)?;
+        Ok(config)
+    }
+}
+
 /// 数据传输管道配置
 /// 定义了一个完整的 Source -> Transform -> Sink 流程
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DataTransferConfig {
-    pub metadata: DataTransferMetadata,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<DataTransferMetadata>,
     /// 数据源配置列表（序列化存储）
     #[serde(default)]
     pub sources: Vec<Box<dyn Source>>,
@@ -275,14 +338,106 @@ impl DataTransferConfig {
         sinks: Vec<Box<dyn Sink>>,
     ) -> Self {
         Self {
-            metadata: DataTransferMetadata {
+            metadata: Some(DataTransferMetadata {
                 id,
                 name,
                 description,
-            },
+            }),
             sources,
             transforms,
             sinks,
         }
     }
+
+    pub fn from_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
+        let content = std::fs::read_to_string(path)?;
+        let config: Self = toml::from_str(&content)?;
+        Ok(config)
+    }
+
+    /// 合并全局配置和管道配置
+    pub fn with_global_config(mut self, global_config: &GlobalConfigData) -> Self {
+        self.metadata = global_config.metadata.clone();
+        self
+    }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_datatransferconfig_from_file() {
+        // 创建一个临时的 TOML 配置文件用于测试
+        let test_config = r#"
+[[sources]]
+source_type = "file"
+path = "/tmp/test_input.txt"
+watch = true
+
+[[transforms]]
+transform_type = "json"
+add_timestamp = true
+
+[[sinks]]
+sink_type = "file"
+path = "/tmp/test_output.txt"
+force = true
+env = { platform = { kernel = "Linux", arch = "X86_64", distribution = "Unknown" } }
+"#;
+
+        // 将测试配置写入临时文件
+        std::fs::write("test_config.toml", test_config).unwrap();
+
+        // 测试 from_file 方法
+        let config = DataTransferConfig::from_file("test_config.toml");
+        assert!(config.is_ok());
+
+        let config = config.unwrap();
+        assert_eq!(config.sources.len(), 1);
+        assert_eq!(config.transforms.len(), 1);
+        assert_eq!(config.sinks.len(), 1);
+
+        // 清理临时文件
+        std::fs::remove_file("test_config.toml").unwrap();
+    }
+
+    #[test]
+    fn test_globalconfigdata_from_file() {
+        // 创建一个临时的 TOML 配置文件用于测试
+        let test_config = r#"
+[metadata]
+id = "test-pipeline"
+name = "Test Pipeline"
+description = "A test pipeline for logging configuration"
+
+[global]
+debug = true
+
+[api]
+listen_address = "0.0.0.0:8080"
+log_level = "debug"
+metrics_enabled = true
+
+[log]
+path = "./test_logs/"
+"#;
+
+        // 将测试配置写入临时文件
+        std::fs::write("test_global_config.toml", test_config).unwrap();
+
+        // 测试 from_file 方法
+        let global_config = GlobalConfigData::from_file("test_global_config.toml");
+        assert!(global_config.is_ok());
+
+        let global_config = global_config.unwrap();
+        assert_eq!(global_config.metadata.unwrap().id, "test-pipeline");
+        assert_eq!(global_config.api.log_level, "debug");
+        assert_eq!(global_config.log.path, "./test_logs/");
+
+        // 清理临时文件
+        std::fs::remove_file("test_global_config.toml").unwrap();
+    }
+}
+
+

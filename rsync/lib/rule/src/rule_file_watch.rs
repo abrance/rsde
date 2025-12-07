@@ -1,5 +1,5 @@
 use crate::controller::Controller;
-use crate::rule::DataTransferConfig;
+use crate::rule::{DataTransferConfig, GlobalConfigData};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -9,6 +9,7 @@ pub struct RuleFileWatcher {
     controller: Arc<Mutex<Controller>>,
     watch_dir: String,
     loaded_files: Vec<String>,
+    global_config: Option<GlobalConfigData>,
 }
 
 impl RuleFileWatcher {
@@ -17,6 +18,7 @@ impl RuleFileWatcher {
             controller,
             watch_dir,
             loaded_files: Vec::new(),
+            global_config: None,
         }
     }
 
@@ -44,23 +46,42 @@ impl RuleFileWatcher {
             }
         };
 
+        // 首先检查全局配置文件
+        let global_config_path = path.join("config.toml");
+        if global_config_path.exists() {
+            let global_config_file = global_config_path.file_name().unwrap().to_string_lossy().to_string();
+            if !self.loaded_files.contains(&global_config_file) {
+                match self.load_global_config(&global_config_path).await {
+                    Ok(_) => {
+                        println!("Successfully loaded global config from {:?}", global_config_path);
+                        self.loaded_files.push(global_config_file);
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to load global config from {:?}: {}", global_config_path, e);
+                        self.loaded_files.push(global_config_file);
+                    }
+                }
+            }
+        }
+
+        // 然后处理管道配置文件
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
             if let Some(extension) = path.extension() {
                 if extension == "toml" {
                     let file_name = path.file_name().unwrap().to_string_lossy().to_string();
 
-                    // Skip Cargo.toml
-                    if file_name == "Cargo.toml" {
+                    // Skip Cargo.toml and config.toml (already handled)
+                    if file_name == "Cargo.toml" || file_name == "config.toml" {
                         continue;
                     }
 
-                    if !self.loaded_files.contains(&file_name) {
-                        println!("Found new config file: {file_name}");
-                        if let Err(e) = self.load_config(&path).await {
-                            eprintln!("Failed to load config from {file_name}: {e}");
+                    // 处理以 .rule.toml 结尾的文件作为管道配置
+                    if file_name.ends_with(".rule.toml") && !self.loaded_files.contains(&file_name) {
+                        println!("Found new pipeline config file: {file_name}");
+                        if let Err(e) = self.load_pipeline_config(&path).await {
+                            eprintln!("Failed to load pipeline config from {file_name}: {e}");
                             // Add to loaded_files to prevent infinite retry loop on bad config
-                            // In a real system, we might want a separate "failed" list or retry with backoff
                             self.loaded_files.push(file_name);
                         } else {
                             self.loaded_files.push(file_name);
@@ -71,16 +92,31 @@ impl RuleFileWatcher {
         }
     }
 
-    async fn load_config(&self, path: &Path) -> anyhow::Result<()> {
+    async fn load_global_config(&mut self, path: &Path) -> anyhow::Result<()> {
+        let content = tokio::fs::read_to_string(path)
+            .await
+            .map_err(|e| anyhow::anyhow!("Read error: {e}"))?;
+
+        let config: GlobalConfigData =
+            toml::from_str(&content).map_err(|e| anyhow::anyhow!("Parse error: {e}"))?;
+
+        self.global_config = Some(config);
+        Ok(())
+    }
+
+    async fn load_pipeline_config(&self, path: &Path) -> anyhow::Result<()> {
         let content = tokio::fs::read_to_string(path)
             .await
             .map_err(|e| anyhow::anyhow!("Read error: {e}"))?;
 
         // 使用 toml crate 解析配置
-        // 注意：这里假设 DataTransferConfig 实现了 Deserialize
-        // 并且其中的 Box<dyn Source> 等字段可以通过 typetag 正确反序列化
-        let config: DataTransferConfig =
+        let mut config: DataTransferConfig =
             toml::from_str(&content).map_err(|e| anyhow::anyhow!("Parse error: {e}"))?;
+
+        // 如果有全局配置，合并到管道配置中
+        if let Some(global_config) = &self.global_config {
+            config = config.with_global_config(global_config);
+        }
 
         let mut controller = self.controller.lock().await;
         controller

@@ -1,10 +1,14 @@
 use axum::{http::StatusCode, response::Json, routing::get, Router};
 use rule::{controller::Controller, rule_file_watch::RuleFileWatcher};
+use rule::rule::GlobalConfigData;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::info;
-use util::log::{setup, LogConfig};
+use util::log::setup;
+
+
+const DEFAULT_CONFIG_FILE_LIST: [&str; 3] = ["config.toml", "rsync.toml", "example.toml"];
 
 async fn health_check() -> (StatusCode, Json<Value>) {
     (StatusCode::OK, Json(json!({ "status": "healthy" })))
@@ -12,14 +16,18 @@ async fn health_check() -> (StatusCode, Json<Value>) {
 
 #[tokio::main]
 async fn main() {
-    let log_config = LogConfig {
-        level: if std::env::var("DEBUG").is_ok() {
-            "debug".to_string()
-        } else {
-            "info".to_string()
-        },
-        file_path: None,
+    // 首先尝试从默认配置文件加载全局配置
+    let global_config = load_global_config_from_file().unwrap_or_else(|_| {
+        // 如果无法加载配置文件，则使用默认配置
+        GlobalConfigData::default()
+    });
+
+    // 从全局配置中提取日志配置
+    let log_config = util::log::LogConfig {
+        level: global_config.api.log_level.clone(),
+        file_path: Some(global_config.log.path.clone()),
     };
+
     setup(log_config);
     let controller = Arc::new(Mutex::new(Controller::new()));
 
@@ -59,4 +67,22 @@ async fn main() {
 
     // 取消 HTTP 服务器任务
     server_task.abort();
+}
+
+fn load_global_config_from_file() -> Result<GlobalConfigData, Box<dyn std::error::Error>> {
+    // 尝试加载全局配置文件
+    let config_path = DEFAULT_CONFIG_FILE_LIST
+        .iter()
+        .find_map(|&file| {
+            std::path::Path::new(file).exists().then(|| file.to_string())
+        });
+
+    if let Some(path) = config_path {
+        // 使用新的 GlobalConfigData::from_file 方法加载全局配置
+        let global_config = GlobalConfigData::from_file(path)?;
+        Ok(global_config)
+    } else {
+        // 如果没有找到配置文件，返回错误
+        Err("No configuration file found".into())
+    }
 }
