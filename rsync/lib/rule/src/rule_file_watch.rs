@@ -58,15 +58,13 @@ impl RuleFileWatcher {
                 match self.load_global_config(&global_config_path).await {
                     Ok(_) => {
                         println!(
-                            "Successfully loaded global config from {:?}",
-                            global_config_path
+                            "Successfully loaded global config from {global_config_path:?}",
                         );
                         self.loaded_files.push(global_config_file);
                     }
                     Err(e) => {
                         eprintln!(
-                            "Failed to load global config from {:?}: {}",
-                            global_config_path, e
+                            "Failed to load global config from {global_config_path:?}: {e}",
                         );
                         self.loaded_files.push(global_config_file);
                     }
