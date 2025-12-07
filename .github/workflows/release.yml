@@ -81,23 +81,23 @@ jobs:
       working-directory: ./rsync
       run: |
         if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
-          aarch64-linux-gnu-strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+          aarch64-linux-gnu-strip target/${{ matrix.target }}/release/rsync
         else
-          strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+          strip target/${{ matrix.target }}/release/rsync
         fi
     
     - name: Strip binary (macOS)
       if: runner.os == 'macOS'
       working-directory: ./rsync
-      run: strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+      run: strip target/${{ matrix.target }}/release/rsync
     
     - name: Create release directory structure
       run: |
         mkdir -p rsde
-        cp rsync/target/${{ matrix.target }}/release/${{ matrix.artifact_name }} rsde/
+        cp rsync/target/${{ matrix.target }}/release/rsync rsde/
         cp rsync/README.md rsde/ 2>/dev/null || echo "# Rsync" > rsde/README.md
         cp rsync/example.toml rsde/ 2>/dev/null || true
-        
+
         # 创建版本信息文件
         cat > rsde/VERSION << EOF
         Version: ${{ github.ref_name }}
