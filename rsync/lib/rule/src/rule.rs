@@ -263,7 +263,6 @@ pub struct GlobalConfig {
     pub debug: bool,
 }
 
-
 /// api API 服务配置
 #[derive(Clone, Debug, Deserialize, Serialize, Default)]
 pub struct ApiConfig {
@@ -439,5 +438,3 @@ path = "./test_logs/"
         std::fs::remove_file("test_global_config.toml").unwrap();
     }
 }
-
-

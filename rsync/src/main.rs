@@ -1,12 +1,11 @@
 use axum::{http::StatusCode, response::Json, routing::get, Router};
-use rule::{controller::Controller, rule_file_watch::RuleFileWatcher};
 use rule::rule::GlobalConfigData;
+use rule::{controller::Controller, rule_file_watch::RuleFileWatcher};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::info;
 use util::log::setup;
-
 
 const DEFAULT_CONFIG_FILE_LIST: [&str; 3] = ["config.toml", "rsync.toml", "example.toml"];
 
@@ -71,11 +70,11 @@ async fn main() {
 
 fn load_global_config_from_file() -> Result<GlobalConfigData, Box<dyn std::error::Error>> {
     // 尝试加载全局配置文件
-    let config_path = DEFAULT_CONFIG_FILE_LIST
-        .iter()
-        .find_map(|&file| {
-            std::path::Path::new(file).exists().then(|| file.to_string())
-        });
+    let config_path = DEFAULT_CONFIG_FILE_LIST.iter().find_map(|&file| {
+        std::path::Path::new(file)
+            .exists()
+            .then(|| file.to_string())
+    });
 
     if let Some(path) = config_path {
         // 使用新的 GlobalConfigData::from_file 方法加载全局配置

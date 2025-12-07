@@ -25,7 +25,11 @@ impl Controller {
         // 检查 metadata 是否存在
         let metadata = match &config.metadata {
             Some(metadata) => metadata,
-            None => return Err(RsyncError::ConfigError("Missing metadata in config".to_string())),
+            None => {
+                return Err(RsyncError::ConfigError(
+                    "Missing metadata in config".to_string(),
+                ))
+            }
         };
 
         let pipeline_id = metadata.id.clone();

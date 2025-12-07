@@ -49,15 +49,25 @@ impl RuleFileWatcher {
         // 首先检查全局配置文件
         let global_config_path = path.join("config.toml");
         if global_config_path.exists() {
-            let global_config_file = global_config_path.file_name().unwrap().to_string_lossy().to_string();
+            let global_config_file = global_config_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
             if !self.loaded_files.contains(&global_config_file) {
                 match self.load_global_config(&global_config_path).await {
                     Ok(_) => {
-                        println!("Successfully loaded global config from {:?}", global_config_path);
+                        println!(
+                            "Successfully loaded global config from {:?}",
+                            global_config_path
+                        );
                         self.loaded_files.push(global_config_file);
                     }
                     Err(e) => {
-                        eprintln!("Failed to load global config from {:?}: {}", global_config_path, e);
+                        eprintln!(
+                            "Failed to load global config from {:?}: {}",
+                            global_config_path, e
+                        );
                         self.loaded_files.push(global_config_file);
                     }
                 }
@@ -77,7 +87,8 @@ impl RuleFileWatcher {
                     }
 
                     // 处理以 .rule.toml 结尾的文件作为管道配置
-                    if file_name.ends_with(".rule.toml") && !self.loaded_files.contains(&file_name) {
+                    if file_name.ends_with(".rule.toml") && !self.loaded_files.contains(&file_name)
+                    {
                         println!("Found new pipeline config file: {file_name}");
                         if let Err(e) = self.load_pipeline_config(&path).await {
                             eprintln!("Failed to load pipeline config from {file_name}: {e}");
