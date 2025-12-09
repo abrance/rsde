@@ -45,9 +45,9 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(DEFAULT_LISTEN_ADDR)
         .await
-        .expect("Failed to bind to port 8080");
+        .expect("Failed: listener bind");
 
-    info!("HTTP server running on port 8080");
+    info!("HTTP server running on {}", DEFAULT_LISTEN_ADDR);
 
     // 在单独的任务中运行 HTTP 服务器
     let server_task = tokio::spawn(async move {
@@ -58,7 +58,7 @@ async fn main() {
 
     // Keep the main thread alive to let the controller run
     info!("Rsync service running... Waiting for config files in current directory.");
-    info!("Health check endpoint available at http://localhost:8080/health");
+    info!("Health check endpoint available at /health");
     info!("Press Ctrl+C to stop.");
 
     // 等待 Ctrl+C 信号

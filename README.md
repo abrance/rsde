@@ -17,3 +17,14 @@ rsync 是一个基于规则引擎的文件（数据）同步工具。支持多�
 - bin: 各种脚本和可执行文件
 - log: 日志文件
 
+## 特性
+
+- frontend web ui(todo)
+- backend apiserver
+- log
+- github workflow
+- health check url
+- configuration file support(toml)
+- metrics server(prometheus )  (todo)
+- helm chart
+- helm files (todo)
