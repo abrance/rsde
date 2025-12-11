@@ -1,0 +1,12 @@
+[package]
+name = "pic_recog"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+tesseract-rs = { workspace = true }
+
+[[test]]
+# 集成测试目录
+name = "tp_pic_recog_basic"
+path = "../test/plan/tp_pic_recog_basic.rs"

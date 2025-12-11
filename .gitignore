@@ -229,3 +229,4 @@ dmypy.json
 
 # binary files
 bin/*
+*.traineddata
