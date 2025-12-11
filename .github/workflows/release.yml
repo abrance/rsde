@@ -70,9 +70,15 @@ jobs:
     
     - name: Build release binary
       working-directory: ./rsync
+      run: cargo build --release --target ${{ matrix.target }}
+    
+    - name: List build artifacts
+      working-directory: ./rsync
       run: |
-        cargo build --release --target ${{ matrix.target }}
-        ls -lh target/${{ matrix.target }}/release/
+        echo "Checking target directory structure..."
+        ls -lh target/ || echo "target/ not found"
+        ls -lh target/${{ matrix.target }}/ || echo "target/${{ matrix.target }}/ not found"
+        ls -lh target/${{ matrix.target }}/release/ || echo "target/${{ matrix.target }}/release/ not found"
     
     - name: Strip binary (Linux)
       if: runner.os == 'Linux'
