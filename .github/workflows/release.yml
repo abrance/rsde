@@ -20,20 +20,20 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: rsync
-            asset_name: rsync-linux-x86_64
+            make_target: release-linux-x86_64
+            asset_name: rsde-linux-x86_64
           # - os: ubuntu-latest
           #   target: aarch64-unknown-linux-gnu
-          #   artifact_name: rsync
-          #   asset_name: rsync-linux-aarch64
+          #   make_target: release-linux-aarch64
+          #   asset_name: rsde-linux-aarch64
           # - os: macos-latest
           #   target: x86_64-apple-darwin
-          #   artifact_name: rsync
-          #   asset_name: rsync-macos-x86_64
+          #   make_target: release-darwin-x86_64
+          #   asset_name: rsde-darwin-x86_64
           # - os: macos-latest
           #   target: aarch64-apple-darwin
-          #   artifact_name: rsync
-          #   asset_name: rsync-macos-aarch64
+          #   make_target: release-darwin-aarch64
+          #   asset_name: rsde-darwin-aarch64
     
     steps:
     - name: Checkout code
@@ -65,30 +65,21 @@ jobs:
     - name: Cache target directory
       uses: actions/cache@v4
       with:
-        path: rsync/target
+        path: target
         key: ${{ runner.os }}-${{ matrix.target }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
     
-    - name: Build release binary
-      working-directory: ./rsync
+    - name: Build release binaries with Make
       run: |
         echo "Building for target: ${{ matrix.target }}"
-        cargo build --release --target ${{ matrix.target }}
-        echo "Build completed with exit code: $?"
-    
-    - name: Strip binary (Linux)
-      if: runner.os == 'Linux'
-      run: strip target/${{ matrix.target }}/release/rsync
-    
-    # - name: Strip binary (macOS)
-    #   if: runner.os == 'macOS'
-    #   working-directory: ./rsync
-    #   run: strip target/${{ matrix.target }}/release/rsync
+        make ${{ matrix.make_target }}
+        echo "Build completed successfully"
+        ls -lh bin/
     
     - name: Create release directory structure
       run: |
         mkdir -p rsde
-        cp target/${{ matrix.target }}/release/rsync rsde/
-        cp rsync/README.md rsde/ 2>/dev/null || echo "# Rsync" > rsde/README.md
+        cp bin/*-${{ matrix.target }} rsde/ 2>/dev/null || cp bin/*-linux-x86_64 rsde/
+        cp rsync/README.md rsde/ 2>/dev/null || echo "# RSDE" > rsde/README.md
         cp rsync/example.toml rsde/ 2>/dev/null || true
 
         # 创建版本信息文件
@@ -97,6 +88,7 @@ jobs:
         Git Commit: ${{ github.sha }}
         Build Date: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
         Target: ${{ matrix.target }}
+        Components: rsync, rc, webserver, apiserver
         EOF
     
     - name: Create tarball
@@ -175,23 +167,26 @@ jobs:
         
         Download the appropriate tarball for your platform:
         
-        - **Linux x86_64**: `rsync-linux-x86_64.tar.gz`
-        # - **Linux ARM64**: `rsync-linux-aarch64.tar.gz`
-        # - **macOS x86_64**: `rsync-macos-x86_64.tar.gz`
-        # - **macOS ARM64** (Apple Silicon): `rsync-macos-aarch64.tar.gz`
+        - **Linux x86_64**: `rsde-linux-x86_64.tar.gz`
+        # - **Linux ARM64**: `rsde-linux-aarch64.tar.gz`
+        # - **macOS x86_64**: `rsde-darwin-x86_64.tar.gz`
+        # - **macOS ARM64** (Apple Silicon): `rsde-darwin-aarch64.tar.gz`
         
         Extract and run:
         ```bash
-        tar xzf rsync-*.tar.gz
+        tar xzf rsde-*.tar.gz
         cd rsde
-        ./rsync
+        ./rsync-linux-x86_64 --help
+        ./rc-linux-x86_64 --help
+        ./webserver-linux-x86_64 --help
+        ./apiserver-linux-x86_64 --help
         ```
         
         ## Verification
         
         Each release includes SHA256 checksums. Verify your download:
         ```bash
-        sha256sum -c rsync-*.tar.gz.sha256
+        sha256sum -c rsde-*.tar.gz.sha256
         ```
         
         ## Docker Image
