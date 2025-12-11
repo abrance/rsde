@@ -70,12 +70,13 @@ jobs:
     
     - name: Build release binary
       working-directory: ./rsync
-      run: cargo build --release --target ${{ matrix.target }}
+      run: |
+        cargo build --release --target ${{ matrix.target }}
+        ls -lh target/${{ matrix.target }}/release/
     
     - name: Strip binary (Linux)
       if: runner.os == 'Linux'
-      working-directory: ./rsync
-      run: ls -lh target/ && ls -lh target/${{ matrix.target }}/release/ && strip target/${{ matrix.target }}/release/rsync
+      run: strip rsync/target/${{ matrix.target }}/release/rsync
     
     # - name: Strip binary (macOS)
     #   if: runner.os == 'macOS'
