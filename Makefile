@@ -111,3 +111,15 @@ test-binaries:
 	bin/webserver --help || echo "webserver binary not found or failed"
 	@echo "Testing apiserver binary..."
 	bin/apiserver --help || echo "apiserver binary not found or failed"
+
+.PHONY: fmt-check
+fmt-check:
+	cargo fmt -- --check
+
+.PHONY: fmt
+fmt:
+	cargo fmt
+
+.PHONY: clippy
+clippy:
+	cargo clippy --all-targets --all-features

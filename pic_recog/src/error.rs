@@ -23,19 +23,19 @@ impl fmt::Display for ImageRecognitionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ImageRecognitionError::FileNotFound(path) => {
-                write!(f, "图片文件不存在: {}", path)
+                write!(f, "图片文件不存在: {path}")
             }
             ImageRecognitionError::TesseractError(msg) => {
-                write!(f, "Tesseract OCR 错误: {}", msg)
+                write!(f, "Tesseract OCR 错误: {msg}")
             }
             ImageRecognitionError::UnsupportedFormat(format) => {
-                write!(f, "不支持的图片格式: {}", format)
+                write!(f, "不支持的图片格式: {format}")
             }
             ImageRecognitionError::IoError(err) => {
-                write!(f, "IO 错误: {}", err)
+                write!(f, "IO 错误: {err}")
             }
             ImageRecognitionError::EngineError(msg) => {
-                write!(f, "识别引擎错误: {}", msg)
+                write!(f, "识别引擎错误: {msg}")
             }
         }
     }

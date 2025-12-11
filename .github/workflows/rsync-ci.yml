@@ -6,11 +6,21 @@ on:
     paths:
       - 'rsync/**'
       - '.github/workflows/rsync-ci.yml'
+      - 'apiserver/**'
+      - 'common/**'
+      - 'pic_recog/**'
+      - 'webserver/**'
+      - 'test/**'
   pull_request:
     branches: [ master, main, develop ]
     paths:
       - 'rsync/**'
       - '.github/workflows/rsync-ci.yml'
+      - 'apiserver/**'
+      - 'common/**'
+      - 'pic_recog/**'
+      - 'webserver/**'
+      - 'test/**'
 
 env:
   CARGO_TERM_COLOR: always

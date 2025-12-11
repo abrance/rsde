@@ -2,11 +2,11 @@
 //!
 //! 实现基于 Tesseract 的图片文字识别功能
 
-use std::process::Command;
+use super::utils::get_tessdata_dir;
 use crate::config::OcrConfig;
 use crate::error::ImageRecognitionError;
 use crate::utils::validate_image_path;
-use super::utils::get_tessdata_dir;
+use std::process::Command;
 
 /// 使用 Tesseract 识别图片中的文字
 ///
@@ -16,10 +16,7 @@ use super::utils::get_tessdata_dir;
 ///
 /// # 返回
 /// 提取的文本内容
-pub fn recognize(
-    image_path: &str,
-    config: &OcrConfig,
-) -> Result<String, ImageRecognitionError> {
+pub fn recognize(image_path: &str, config: &OcrConfig) -> Result<String, ImageRecognitionError> {
     // 验证图片路径
     validate_image_path(image_path)?;
 
@@ -49,8 +46,7 @@ pub fn recognize(
     // 执行命令
     let output = cmd.output().map_err(|e| {
         ImageRecognitionError::TesseractError(format!(
-            "执行 tesseract 命令失败: {}. 请确保系统已安装 tesseract-ocr",
-            e
+            "执行 tesseract 命令失败: {e}. 请确保系统已安装 tesseract-ocr"
         ))
     })?;
 
@@ -58,14 +54,13 @@ pub fn recognize(
     if !output.status.success() {
         let error_msg = String::from_utf8_lossy(&output.stderr);
         return Err(ImageRecognitionError::TesseractError(format!(
-            "Tesseract 执行失败: {}",
-            error_msg
+            "Tesseract 执行失败: {error_msg}"
         )));
     }
 
     // 解析输出
     let text = String::from_utf8(output.stdout)
-        .map_err(|e| ImageRecognitionError::TesseractError(format!("解析输出失败: {}", e)))?;
+        .map_err(|e| ImageRecognitionError::TesseractError(format!("解析输出失败: {e}")))?;
 
     Ok(text)
 }
