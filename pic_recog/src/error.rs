@@ -15,6 +15,10 @@ pub enum ImageRecognitionError {
     UnsupportedFormat(String),
     /// IO 错误
     IoError(std::io::Error),
+    /// 输入校验错误
+    ValidationError(String),
+    /// 配置错误
+    ConfigError(String),
     /// 其他引擎错误（预留给未来的识别引擎）
     EngineError(String),
 }
@@ -33,6 +37,12 @@ impl fmt::Display for ImageRecognitionError {
             }
             ImageRecognitionError::IoError(err) => {
                 write!(f, "IO 错误: {err}")
+            }
+            ImageRecognitionError::ValidationError(msg) => {
+                write!(f, "输入校验错误: {msg}")
+            }
+            ImageRecognitionError::ConfigError(msg) => {
+                write!(f, "配置错误: {msg}")
             }
             ImageRecognitionError::EngineError(msg) => {
                 write!(f, "识别引擎错误: {msg}")

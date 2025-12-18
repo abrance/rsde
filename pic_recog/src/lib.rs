@@ -76,7 +76,7 @@ pub mod error;
 pub mod utils;
 
 // 重新导出常用类型
-pub use config::OcrConfig;
+pub use config::{OcrConfig, RemoteOcrConfig};
 pub use error::ImageRecognitionError;
 
 // ============================================================================
@@ -274,4 +274,23 @@ pub fn recognize_batch(
     config: &OcrConfig,
 ) -> Vec<Result<String, ImageRecognitionError>> {
     engines::tesseract::recognize_batch(image_paths, config)
+}
+
+/// 使用远程 OCR 服务识别图片
+///
+/// 在调用远程服务之前会对图片尺寸、体积与格式进行校验。
+/// 具体的远程服务端点、鉴权信息等参数通过 `RemoteOcrConfig` 的
+/// TOML 配置文件加载。
+///
+/// # 参数
+/// * `image_path` - 图片文件路径
+/// * `config` - 远程 OCR 配置
+///
+/// # 返回
+/// 远程 OCR 服务返回的识别文本；若无法解析文本，则返回原始 JSON 响应字符串
+pub fn recognize_image_by_remote(
+    image_path: &str,
+    config: &RemoteOcrConfig,
+) -> Result<String, ImageRecognitionError> {
+    engines::remote::recognize(image_path, config)
 }

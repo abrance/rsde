@@ -230,3 +230,5 @@ dmypy.json
 # binary files
 bin/*
 *.traineddata
+
+manifest/dev/remote_ocr.toml
