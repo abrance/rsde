@@ -2,11 +2,11 @@
 //!
 //! 实现通过 HTTP 调用 web.xxxxapp.com 的 OCR 服务
 
-use crate::config::RemoteOcrConfig;
 use crate::error::ImageRecognitionError;
 use crate::utils::{load_and_validate_remote_image, RemoteImagePayload};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
+use config::ocr::RemoteOcrConfig;
 use reqwest::blocking::{Client, RequestBuilder};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, CONTENT_TYPE};
 use serde_json::{json, Value};
@@ -18,9 +18,18 @@ const ACCEPT_HEADER_VALUE: &str = "application/json, text/plain, */*";
 const CONTENT_TYPE_JSON: &str = "application/json;charset=UTF-8";
 
 /// 调用远程 OCR 服务并返回识别结果
+///
+/// # 参数
+///
+/// * `image_path` - 图片文件路径
+/// * `config` - 远程 OCR 配置
+/// * `include_position` - 是否保留坐标等位置信息（默认 true）
+///   - true: 返回包含坐标信息的完整 JSON 结果
+///   - false: 仅返回提取的纯文本内容
 pub fn recognize(
     image_path: &str,
     config: &RemoteOcrConfig,
+    include_position: bool,
 ) -> Result<String, ImageRecognitionError> {
     let payload = load_and_validate_remote_image(image_path)?;
     let client = build_http_client(config)?;
@@ -29,13 +38,14 @@ pub fn recognize(
     let job_id = start_job(&client, config, &payload, image_path, &perm_token)?;
     let final_snapshot = poll_for_completion(&client, config, &job_id)?;
 
-    if let Some(text) = extract_text(&final_snapshot) {
-        return Ok(text);
+    if include_position {
+        // 返回完整的结果（包含坐标信息）
+        extract_full_result(&final_snapshot)
+    } else {
+        // 仅返回纯文本
+        extract_text(&final_snapshot)
+            .ok_or_else(|| ImageRecognitionError::EngineError("无法从响应中提取文本".to_string()))
     }
-
-    serde_json::to_string(&final_snapshot).map_err(|err| {
-        ImageRecognitionError::EngineError(format!("序列化远程 OCR 结果失败: {err}"))
-    })
 }
 
 fn build_http_client(config: &RemoteOcrConfig) -> Result<Client, ImageRecognitionError> {
@@ -287,6 +297,41 @@ fn job_is_finished(snapshot: &Value) -> Option<bool> {
 fn referer_from_origin(origin: &str) -> String {
     let trimmed = origin.trim_end_matches('/');
     format!("{}/", trimmed)
+}
+
+/// 提取包含坐标信息的完整结果
+fn extract_full_result(snapshot: &Value) -> Result<String, ImageRecognitionError> {
+    // 优先处理 ydResp.words_result 结构（包含坐标）
+    if let Some(words_result) = snapshot.pointer("/data/ydResp/words_result") {
+        return serde_json::to_string_pretty(words_result).map_err(|err| {
+            ImageRecognitionError::EngineError(format!("序列化完整结果失败: {err}"))
+        });
+    }
+
+    // 备用：返回 data.result 或 data.jobStatus.result
+    if let Some(result) = snapshot.pointer("/data/jobStatus/result") {
+        return serde_json::to_string_pretty(result).map_err(|err| {
+            ImageRecognitionError::EngineError(format!("序列化完整结果失败: {err}"))
+        });
+    }
+
+    if let Some(result) = snapshot.pointer("/data/result") {
+        return serde_json::to_string_pretty(result).map_err(|err| {
+            ImageRecognitionError::EngineError(format!("序列化完整结果失败: {err}"))
+        });
+    }
+
+    // 如果没有找到特定字段，返回整个 data 部分
+    if let Some(data) = snapshot.pointer("/data") {
+        return serde_json::to_string_pretty(data).map_err(|err| {
+            ImageRecognitionError::EngineError(format!("序列化完整结果失败: {err}"))
+        });
+    }
+
+    // 最后兜底：返回整个响应
+    serde_json::to_string_pretty(snapshot).map_err(|err| {
+        ImageRecognitionError::EngineError(format!("序列化远程 OCR 结果失败: {err}"))
+    })
 }
 
 fn extract_text(snapshot: &Value) -> Option<String> {

@@ -3,9 +3,9 @@
 //! 实现基于 Tesseract 的图片文字识别功能
 
 use super::utils::get_tessdata_dir;
-use crate::config::OcrConfig;
 use crate::error::ImageRecognitionError;
 use crate::utils::validate_image_path;
+use config::ocr::OcrConfig;
 use std::process::Command;
 
 /// 使用 Tesseract 识别图片中的文字

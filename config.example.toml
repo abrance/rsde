@@ -1,0 +1,47 @@
+# 全局项目配置文件示例
+# 包含所有服务的配置，避免多个配置文件难以管理
+
+# ============================================================================
+# API Server 配置
+# ============================================================================
+[apiserver]
+listen_address = "0.0.0.0:3000"
+log_level = "info"
+cors_enabled = true
+
+# ============================================================================
+# 远程 OCR 配置
+# ============================================================================
+[remote_ocr]
+perm_url = "https://web.xxxx.com/api/perm/single"
+start_url = "https://web.xxxx.com/api/ocr/image/beta"
+status_url = "https://web.xxxx.com/api/ocr/image/beta/status"
+auth_token = "your_auth_token_here"
+auth_uuid = "your_auth_uuid_here"
+auth_cookie = "your_auth_cookie_here"
+origin = "https://web.xxxx.com"
+mode = "single"
+timeout_secs = 30
+poll_interval_ms = 3000
+poll_max_attempts = 10
+poll_initial_delay_ms = 500
+accept_invalid_certs = false
+
+# ============================================================================
+# Rsync 服务配置
+# ============================================================================
+[rsync.metadata]
+id = "rsync-service"
+name = "Rsync Service"
+description = "Data synchronization service"
+
+[rsync.global]
+debug = false
+
+[rsync.api]
+listen_address = "0.0.0.0:8080"
+log_level = "info"
+metrics_enabled = true
+
+[rsync.log]
+path = "./log/"

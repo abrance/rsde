@@ -4,6 +4,7 @@ edition.workspace = true
 version.workspace = true
 
 [dependencies]
+config = { path = "../common/config" }
 tesseract-rs = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -70,13 +70,12 @@
 //! - `utils` - 通用工具函数
 
 // 模块声明
-pub mod config;
 pub mod engines;
 pub mod error;
 pub mod utils;
 
 // 重新导出常用类型
-pub use config::{OcrConfig, RemoteOcrConfig};
+pub use config::ocr::{OcrConfig, RemoteOcrConfig};
 pub use error::ImageRecognitionError;
 
 // ============================================================================
@@ -276,7 +275,7 @@ pub fn recognize_batch(
     engines::tesseract::recognize_batch(image_paths, config)
 }
 
-/// 使用远程 OCR 服务识别图片
+/// 使用远程 OCR 服务识别图片（仅文本）
 ///
 /// 在调用远程服务之前会对图片尺寸、体积与格式进行校验。
 /// 具体的远程服务端点、鉴权信息等参数通过 `RemoteOcrConfig` 的
@@ -287,10 +286,28 @@ pub fn recognize_batch(
 /// * `config` - 远程 OCR 配置
 ///
 /// # 返回
-/// 远程 OCR 服务返回的识别文本；若无法解析文本，则返回原始 JSON 响应字符串
+/// 远程 OCR 服务返回的识别文本（不包含坐标信息）
 pub fn recognize_image_by_remote(
     image_path: &str,
     config: &RemoteOcrConfig,
 ) -> Result<String, ImageRecognitionError> {
-    engines::remote::recognize(image_path, config)
+    engines::remote::recognize(image_path, config, false)
+}
+
+/// 使用远程 OCR 服务识别图片（包含完整坐标信息）
+///
+/// 在调用远程服务之前会对图片尺寸、体积与格式进行校验。
+/// 返回包含文本坐标等位置信息的完整 JSON 结果。
+///
+/// # 参数
+/// * `image_path` - 图片文件路径
+/// * `config` - 远程 OCR 配置
+///
+/// # 返回
+/// 包含坐标信息的完整 JSON 结果字符串
+pub fn recognize_image_by_remote_with_position(
+    image_path: &str,
+    config: &RemoteOcrConfig,
+) -> Result<String, ImageRecognitionError> {
+    engines::remote::recognize(image_path, config, true)
 }

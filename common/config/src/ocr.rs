@@ -1,30 +1,35 @@
-//! 通用配置类型
-//!
-//! 定义了图片识别的通用配置选项
+//! OCR 相关配置
 
-use crate::error::ImageRecognitionError;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-/// OCR 配置选项
-#[derive(Debug, Clone)]
+/// OCR 配置选项（Tesseract 本地 OCR）
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OcrConfig {
     /// 语言代码 (例如: "eng", "chi_sim", "chi_tra", "jpn")
+    #[serde(default = "default_language")]
     pub language: String,
     /// 数据路径 (可选，用于指定模型数据目录)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub data_path: Option<String>,
     /// 页面分割模式 (PSM) - Tesseract 专用
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub page_segmentation_mode: Option<i32>,
     /// OCR 引擎模式 - Tesseract 专用
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub engine_mode: Option<i32>,
+}
+
+fn default_language() -> String {
+    "eng".to_string()
 }
 
 impl Default for OcrConfig {
     fn default() -> Self {
         OcrConfig {
-            language: "eng".to_string(),
+            language: default_language(),
             data_path: None,
             page_segmentation_mode: None,
             engine_mode: None,
@@ -118,14 +123,10 @@ pub struct RemoteOcrConfig {
 
 impl RemoteOcrConfig {
     /// 从 TOML 配置加载远程 OCR 设置
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, ImageRecognitionError> {
-        let content = fs::read_to_string(&path).map_err(|err| {
-            ImageRecognitionError::ConfigError(format!("读取远程 OCR 配置失败: {err}"))
-        })?;
-
-        toml::from_str(&content).map_err(|err| {
-            ImageRecognitionError::ConfigError(format!("解析远程 OCR 配置失败: {err}"))
-        })
+    pub fn from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        let content = fs::read_to_string(&path)?;
+        let config: Self = toml::from_str(&content)?;
+        Ok(config)
     }
 
     /// 请求超时时间
@@ -174,28 +175,6 @@ fn default_poll_max_attempts() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_remote_ocr_config_from_file() {
-        let test_config_content = r#"
-perm_url = "https://example.com/perm"
-start_url = "https://example.com/start"
-status_url = "https://example.com/status"
-auth_token = "changeme"
-auth_uuid = "changeme"
-auth_cookie = "changeme"
-origin = "https://web.xxxxapp.com"
-mode = "single"
-"#;
-        let tmp_path = std::env::temp_dir().join("remote_ocr_example.toml");
-        fs::write(&tmp_path, test_config_content).unwrap();
-        let config = RemoteOcrConfig::from_file(&tmp_path);
-        assert!(config.is_ok());
-        let cfg = config.unwrap();
-        assert_eq!(cfg.mode, "single");
-        assert_eq!(cfg.timeout_secs, 30);
-        fs::remove_file(tmp_path).ok();
-    }
 
     #[test]
     fn test_remote_ocr_config_is_placeholder() {

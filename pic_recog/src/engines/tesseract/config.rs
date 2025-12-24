@@ -2,7 +2,7 @@
 //!
 //! 提供 Tesseract OCR 引擎的配置选项
 
-use crate::config::OcrConfig;
+use config::ocr::OcrConfig;
 
 /// Tesseract 配置扩展
 pub struct TesseractConfig {
