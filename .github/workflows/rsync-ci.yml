@@ -11,6 +11,7 @@ on:
       - 'pic_recog/**'
       - 'webserver/**'
       - 'test/**'
+      - 'Dockerfile'
   pull_request:
     branches: [ master, main, develop ]
     paths:
