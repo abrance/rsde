@@ -125,10 +125,10 @@ impl Controller {
                     }
 
                     // 处理最后一个 sink
-                    if let Some(last_sink) = sink_runtimes.last_mut() {
-                        if let Err(e) = last_sink.write(event).await {
-                            eprintln!("Sink write error: {e}");
-                        }
+                    if let Some(last_sink) = sink_runtimes.last_mut()
+                        && let Err(e) = last_sink.write(event).await
+                    {
+                        eprintln!("Sink write error: {e}");
                     }
                 }
             }

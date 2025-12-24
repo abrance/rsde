@@ -160,8 +160,7 @@ fn validate_dimensions(width: u32, height: u32) -> Result<(), ImageRecognitionEr
     let ratio = longer / shorter.max(1.0);
     if ratio >= MAX_ASPECT_RATIO {
         return Err(ImageRecognitionError::ValidationError(format!(
-            "图片长宽比过大: {:.2}，要求小于 {MAX_ASPECT_RATIO}",
-            ratio
+            "图片长宽比过大: {ratio:.2}，要求小于 {MAX_ASPECT_RATIO}"
         )));
     }
 

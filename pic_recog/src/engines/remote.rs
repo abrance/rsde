@@ -205,14 +205,14 @@ fn execute_json_request(
 fn build_data_url(payload: &RemoteImagePayload) -> Result<String, ImageRecognitionError> {
     let mime = payload.mime_type()?;
     let encoded = BASE64_STANDARD.encode(&payload.bytes);
-    Ok(format!("data:{};base64,{}", mime, encoded))
+    Ok(format!("data:{mime};base64,{encoded}"))
 }
 
 fn sha1_hex(content: &str) -> String {
     let mut hasher = Sha1::new();
     hasher.update(content.as_bytes());
     let digest = hasher.finalize();
-    format!("{:x}", digest)
+    format!("{digest:x}")
 }
 
 fn build_perm_headers(config: &RemoteOcrConfig) -> Result<HeaderMap, ImageRecognitionError> {
@@ -296,7 +296,7 @@ fn job_is_finished(snapshot: &Value) -> Option<bool> {
 
 fn referer_from_origin(origin: &str) -> String {
     let trimmed = origin.trim_end_matches('/');
-    format!("{}/", trimmed)
+    format!("{trimmed}/")
 }
 
 /// 提取包含坐标信息的完整结果
@@ -336,19 +336,19 @@ fn extract_full_result(snapshot: &Value) -> Result<String, ImageRecognitionError
 
 fn extract_text(snapshot: &Value) -> Option<String> {
     // 优先处理 xxxx 的 ydResp.words_result 结构
-    if let Some(words_result) = snapshot.pointer("/data/ydResp/words_result") {
-        if let Some(array) = words_result.as_array() {
-            let mut collected = Vec::new();
-            for item in array {
-                if let Some(words) = item.get("words").and_then(Value::as_str) {
-                    if !words.is_empty() {
-                        collected.push(words.to_string());
-                    }
-                }
+    if let Some(words_result) = snapshot.pointer("/data/ydResp/words_result")
+        && let Some(array) = words_result.as_array()
+    {
+        let mut collected = Vec::new();
+        for item in array {
+            if let Some(words) = item.get("words").and_then(Value::as_str)
+                && !words.is_empty()
+            {
+                collected.push(words.to_string());
             }
-            if !collected.is_empty() {
-                return Some(collected.join("\n"));
-            }
+        }
+        if !collected.is_empty() {
+            return Some(collected.join("\n"));
         }
     }
 
@@ -379,12 +379,11 @@ fn extract_text(snapshot: &Value) -> Option<String> {
                 if !collected.is_empty() {
                     return Some(collected.join("\n"));
                 }
-            } else if let Some(obj) = node.as_object() {
-                if let Some(text) = obj.get("text").and_then(Value::as_str) {
-                    if !text.is_empty() {
-                        return Some(text.to_string());
-                    }
-                }
+            } else if let Some(obj) = node.as_object()
+                && let Some(text) = obj.get("text").and_then(Value::as_str)
+                && !text.is_empty()
+            {
+                return Some(text.to_string());
             }
         }
     }
@@ -414,10 +413,10 @@ fn collect_text_nodes(node: &Value, acc: &mut Vec<String>) {
             }
         }
         Value::Object(map) => {
-            if let Some(text) = map.get("text").and_then(Value::as_str) {
-                if !text.is_empty() {
-                    acc.push(text.to_string());
-                }
+            if let Some(text) = map.get("text").and_then(Value::as_str)
+                && !text.is_empty()
+            {
+                acc.push(text.to_string());
             }
 
             for value in map.values() {
@@ -438,10 +437,10 @@ fn extract_error_message(snapshot: &Value) -> String {
     ];
 
     for path in candidates.iter() {
-        if let Some(text) = snapshot.pointer(path).and_then(Value::as_str) {
-            if !text.is_empty() {
-                return text.to_string();
-            }
+        if let Some(text) = snapshot.pointer(path).and_then(Value::as_str)
+            && !text.is_empty()
+        {
+            return text.to_string();
         }
     }
 

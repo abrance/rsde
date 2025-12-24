@@ -71,26 +71,25 @@ impl RuleFileWatcher {
         // 然后处理管道配置文件
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
-            if let Some(extension) = path.extension() {
-                if extension == "toml" {
-                    let file_name = path.file_name().unwrap().to_string_lossy().to_string();
+            if let Some(extension) = path.extension()
+                && extension == "toml"
+            {
+                let file_name = path.file_name().unwrap().to_string_lossy().to_string();
 
-                    // Skip Cargo.toml and config.toml (already handled)
-                    if file_name == "Cargo.toml" || file_name == "config.toml" {
-                        continue;
-                    }
+                // Skip Cargo.toml and config.toml (already handled)
+                if file_name == "Cargo.toml" || file_name == "config.toml" {
+                    continue;
+                }
 
-                    // 处理以 .rule.toml 结尾的文件作为管道配置
-                    if file_name.ends_with(".rule.toml") && !self.loaded_files.contains(&file_name)
-                    {
-                        println!("Found new pipeline config file: {file_name}");
-                        if let Err(e) = self.load_pipeline_config(&path).await {
-                            eprintln!("Failed to load pipeline config from {file_name}: {e}");
-                            // Add to loaded_files to prevent infinite retry loop on bad config
-                            self.loaded_files.push(file_name);
-                        } else {
-                            self.loaded_files.push(file_name);
-                        }
+                // 处理以 .rule.toml 结尾的文件作为管道配置
+                if file_name.ends_with(".rule.toml") && !self.loaded_files.contains(&file_name) {
+                    println!("Found new pipeline config file: {file_name}");
+                    if let Err(e) = self.load_pipeline_config(&path).await {
+                        eprintln!("Failed to load pipeline config from {file_name}: {e}");
+                        // Add to loaded_files to prevent infinite retry loop on bad config
+                        self.loaded_files.push(file_name);
+                    } else {
+                        self.loaded_files.push(file_name);
                     }
                 }
             }

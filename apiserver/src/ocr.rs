@@ -111,7 +111,7 @@ async fn single_pic_remote(
         error!("OCR 任务执行失败: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(OcrResponse::error(format!("OCR 任务执行失败: {}", e))),
+            Json(OcrResponse::error(format!("OCR 任务执行失败: {e}"))),
         )
     })?;
 
@@ -127,7 +127,7 @@ async fn single_pic_remote(
             error!("OCR 识别失败: {}", e);
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(OcrResponse::error(format!("OCR 识别失败: {}", e))),
+                Json(OcrResponse::error(format!("OCR 识别失败: {e}"))),
             ))
         }
     }
@@ -158,7 +158,7 @@ async fn single_pic_local(
         error!("OCR 任务执行失败: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(OcrResponse::error(format!("OCR 任务执行失败: {}", e))),
+            Json(OcrResponse::error(format!("OCR 任务执行失败: {e}"))),
         )
     })?;
 
@@ -174,7 +174,7 @@ async fn single_pic_local(
             error!("本地 OCR 识别失败: {}", e);
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(OcrResponse::error(format!("本地 OCR 识别失败: {}", e))),
+                Json(OcrResponse::error(format!("本地 OCR 识别失败: {e}"))),
             ))
         }
     }
