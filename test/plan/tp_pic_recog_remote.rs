@@ -1,4 +1,4 @@
-use pic_recog::{recognize_image_by_remote, RemoteOcrConfig};
+use pic_recog::{RemoteOcrConfig, recognize_image_by_remote};
 
 const REMOTE_OCR_CONFIG_PATH: &str = "../manifest/dev/remote_ocr.toml";
 const IMAGE_PATH: &str = "../manifest/dev/tm_1.png";

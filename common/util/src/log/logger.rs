@@ -1,6 +1,6 @@
-use tracing::{error, info, span, subscriber, warn, Level};
+use tracing::{Level, error, info, span, subscriber, warn};
 use tracing_appender::{non_blocking, rolling};
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt};
 
 #[derive(Debug)]
 pub struct LogConfig {

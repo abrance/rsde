@@ -3,13 +3,13 @@
 //! 实现通过 HTTP 调用 web.xxxxapp.com 的 OCR 服务
 
 use crate::error::ImageRecognitionError;
-use crate::utils::{load_and_validate_remote_image, RemoteImagePayload};
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use crate::utils::{RemoteImagePayload, load_and_validate_remote_image};
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use config::ocr::RemoteOcrConfig;
 use reqwest::blocking::{Client, RequestBuilder};
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, CONTENT_TYPE};
-use serde_json::{json, Value};
+use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
+use serde_json::{Value, json};
 use sha1::{Digest, Sha1};
 use std::path::Path;
 use std::thread::sleep;

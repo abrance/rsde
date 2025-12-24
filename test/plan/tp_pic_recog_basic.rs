@@ -1,4 +1,4 @@
-use pic_recog::{recognize_image_with_config, OcrConfig};
+use pic_recog::{OcrConfig, recognize_image_with_config};
 
 const TEST_IMAGE_PATH: &str = "../manifest/dev/tm_1.png";
 const LOCAL_TESSDATA_DIR: &str = "../manifest/dev/train_data";

@@ -3,11 +3,11 @@
 //! 提供 OCR 图片识别的 HTTP API
 
 use axum::{
+    Router,
     extract::State,
     http::StatusCode,
     response::{IntoResponse, Json},
     routing::{get, post},
-    Router,
 };
 use config::ocr::RemoteOcrConfig;
 use serde::{Deserialize, Serialize};

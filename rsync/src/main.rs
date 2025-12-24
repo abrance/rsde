@@ -1,7 +1,7 @@
-use axum::{http::StatusCode, response::Json, routing::get, Router};
+use axum::{Router, http::StatusCode, response::Json, routing::get};
 use rule::rule::GlobalConfigData;
 use rule::{controller::Controller, rule_file_watch::RuleFileWatcher};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::info;

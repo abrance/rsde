@@ -28,7 +28,7 @@ impl Controller {
             None => {
                 return Err(RsyncError::ConfigError(
                     "Missing metadata in config".to_string(),
-                ))
+                ));
             }
         };
 
