@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  apiserver:
+    image: rsde:test
+    container_name: rsde-apiserver
+    ports:
+      - "3000:3000"
+    environment:
+      - API_CONFIG=/app/config/remote_ocr.toml
+    volumes:
+      # 挂载配置文件
+      - ../../manifest/dev/remote_ocr.toml:/app/config/remote_ocr.toml:ro
+      # 挂载日志目录（可选）
+      - ../../log:/app/log
+      # 如果需要本地 OCR，挂载训练数据（可选）
+      - ../../manifest/dev/train_data:/app/train_data:ro
+    command: ["apiserver"]
+    restart: unless-stopped
+    networks:
+      - rsde-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/ocr/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  rsde-network:
+    driver: bridge
