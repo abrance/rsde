@@ -232,3 +232,9 @@ bin/*
 *.traineddata
 
 manifest/dev/remote_ocr.toml
+
+# Frontend
+webserver/frontend/node_modules/
+webserver/frontend/dist/
+webserver/frontend/.vite/
+webserver/frontend/*.local

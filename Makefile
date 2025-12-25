@@ -3,10 +3,9 @@
 # Default target
 help:
 	@echo "Available targets:"
-	@echo "  build                 - Build all binaries (rsync, rc, webserver, apiserver)"
+	@echo "  build                 - Build all binaries (rsync, rc, apiserver)"
 	@echo "  rsync                 - Build only rsync binary"
 	@echo "  rc                    - Build only rc binary"
-	@echo "  webserver             - Build only webserver binary"
 	@echo "  apiserver             - Build only apiserver binary"
 	@echo "  release               - Build release binaries for all platforms"
 	@echo "  release-linux-x86_64  - Build release binaries for Linux x86_64"
@@ -17,7 +16,7 @@ help:
 	@echo "  test                  - Run tests for all projects"
 
 # Build all binaries
-build: rsync rc webserver apiserver
+build: rsync rc apiserver
 
 # Build rsync binary
 rsync:
@@ -32,13 +31,6 @@ rc:
 	cargo build --release -p rc
 	mkdir -p bin
 	cp target/release/rc bin/
-
-# Build webserver binary
-webserver:
-	@echo "Building webserver..."
-	cargo build --release -p webserver
-	mkdir -p bin
-	cp target/release/webserver bin/
 
 # Build apiserver binary
 apiserver:

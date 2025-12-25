@@ -1,5 +1,5 @@
 [workspace]
-members = ["rsync", "rc", "common/*", "webserver", "apiserver", "pic_recog"]
+members = ["rsync", "rc", "common/*", "apiserver", "pic_recog"]
 resolver = "2"
 
 [workspace.package]
@@ -24,4 +24,5 @@ tracing-subscriber = { version = "0.3", features = [
 tracing-appender = "0.2"
 uuid = { version = "1.9", features = ["serde", "v4"] }
 axum = "0.7"
-tower-http = { version = "0.5", features = ["cors"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "fs", "trace"] }

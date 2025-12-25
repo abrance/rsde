@@ -1,9 +1,14 @@
 mod ocr;
 
-use axum::Router;
+use axum::{Router, http::StatusCode};
 use config::{ConfigLoader, GlobalConfig};
 use std::net::SocketAddr;
-use tower_http::cors::{Any, CorsLayer};
+use tower::ServiceBuilder;
+use tower_http::{
+    cors::{Any, CorsLayer},
+    services::{ServeDir, ServeFile},
+    trace::TraceLayer,
+};
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -36,18 +41,57 @@ async fn main() -> anyhow::Result<()> {
         .allow_methods(Any)
         .allow_headers(Any);
 
+    // 前端静态文件目录
+    let frontend_dir = "webserver/frontend/dist";
+    let index_file = format!("{}/index.html", frontend_dir);
+
+    // 检查前端文件是否存在
+    let has_frontend = std::path::Path::new(&frontend_dir).exists();
+    if !has_frontend {
+        info!("⚠️  前端文件未找到: {}", frontend_dir);
+        info!("   运行 'cd webserver/frontend && npm run build' 构建前端");
+    }
+
     // 构建路由
-    let app = Router::new()
-        .nest("/ocr", ocr::create_routes(remote_ocr_config))
-        .layer(cors);
+    let mut app = Router::new()
+        // API 路由
+        .nest("/api/ocr", ocr::create_routes(remote_ocr_config));
+
+    // 如果前端文件存在，添加静态文件服务
+    if has_frontend {
+        app = app
+            .nest_service("/assets", ServeDir::new(format!("{}/assets", frontend_dir)))
+            .fallback_service(
+                ServeDir::new(frontend_dir).not_found_service(ServeFile::new(&index_file)),
+            );
+        info!("✅ 前端服务已启用");
+    } else {
+        // 如果前端不存在，提供一个简单的说明页面
+        app = app.fallback(|| async {
+            (
+                StatusCode::OK,
+                "RSDE API Server\n\n前端未构建，请运行:\ncd webserver/frontend && npm install && npm run build"
+            )
+        });
+    }
+
+    // 添加中间件
+    app = app.layer(
+        ServiceBuilder::new()
+            .layer(TraceLayer::new_for_http())
+            .layer(cors),
+    );
 
     // 监听地址
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
     info!("服务器监听地址: {}", addr);
-    info!("OCR API 可用:");
-    info!("  POST http://localhost:3000/ocr/single_pic - 远程 OCR");
-    info!("  POST http://localhost:3000/ocr/single_pic_local - 本地 OCR");
-    info!("  GET  http://localhost:3000/ocr/health - 健康检查");
+    info!("API 接口:");
+    info!("  POST http://localhost:3000/api/ocr/single_pic - 远程 OCR");
+    info!("  GET  http://localhost:3000/api/ocr/health - 健康检查");
+    if has_frontend {
+        info!("前端页面:");
+        info!("  http://localhost:3000/ - Web UI");
+    }
 
     // 启动服务器
     let listener = tokio::net::TcpListener::bind(addr).await?;

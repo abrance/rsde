@@ -66,6 +66,20 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-target-
     
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: webserver/frontend/package-lock.json
+    
+    - name: Build frontend
+      run: |
+        echo "Building frontend for apiserver..."
+        cd webserver
+        make build
+        ls -lh frontend/dist/
+    
     - name: Check formatting
       working-directory: ./rsync
       run: make fmt-check
@@ -117,6 +131,20 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: webserver/frontend/package-lock.json
+    
+    - name: Build frontend
+      run: |
+        echo "Building frontend for Docker image..."
+        cd webserver
+        make build
+        ls -lh frontend/dist/
     
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
