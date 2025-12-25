@@ -5,7 +5,6 @@ version.workspace = true
 
 [dependencies]
 config = { path = "../common/config" }
-tesseract-rs = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = [
@@ -24,11 +23,6 @@ image = { version = "0.25", default-features = false, features = [
 ] }
 toml = { workspace = true }
 sha1 = "0.10"
-
-[[test]]
-# 集成测试目录
-name = "tp_pic_recog_basic"
-path = "../test/plan/tp_pic_recog_basic.rs"
 
 [[test]]
 # 远程 OCR 接入测试

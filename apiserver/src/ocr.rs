@@ -1,6 +1,6 @@
 //! OCR 路由处理模块
 //!
-//! 提供 OCR 图片识别的 HTTP API
+//! 提供 Remote OCR 图片识别的 HTTP API
 
 use axum::{
     Router,
@@ -26,8 +26,6 @@ pub struct OcrState {
 pub struct SinglePicRequest {
     /// 图片路径或 base64 编码
     pub image_path: String,
-    /// 语言（可选，默认 eng）
-    pub language: Option<String>,
     /// 是否包含坐标信息（可选，默认 false）
     #[serde(default)]
     pub include_position: bool,
@@ -133,53 +131,6 @@ async fn single_pic_remote(
     }
 }
 
-/// 单张图片 OCR 识别 - 使用本地 Tesseract
-///
-/// POST /ocr/single_pic_local
-/// Content-Type: application/json
-/// Body: { "image_path": "/path/to/image.png", "language": "eng" }
-async fn single_pic_local(
-    Json(payload): Json<SinglePicRequest>,
-) -> Result<Json<OcrResponse>, (StatusCode, Json<OcrResponse>)> {
-    info!("收到本地 OCR 请求: image_path={}", payload.image_path);
-
-    let image_path = payload.image_path.clone();
-    let language = payload.language.as_deref().unwrap_or("eng").to_string();
-
-    // 在阻塞线程池中调用本地 Tesseract OCR（因为它执行外部命令）
-    let result = tokio::task::spawn_blocking(move || {
-        pic_recog::recognize_image_with_config(
-            &image_path,
-            &pic_recog::OcrConfig::new().with_language(language),
-        )
-    })
-    .await
-    .map_err(|e| {
-        error!("OCR 任务执行失败: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(OcrResponse::error(format!("OCR 任务执行失败: {e}"))),
-        )
-    })?;
-
-    match result {
-        Ok(text) => {
-            info!("本地 OCR 识别成功: {} 字符", text.len());
-            Ok(Json(OcrResponse::success(
-                text,
-                Some(payload.image_path.clone()),
-            )))
-        }
-        Err(e) => {
-            error!("本地 OCR 识别失败: {}", e);
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(OcrResponse::error(format!("本地 OCR 识别失败: {e}"))),
-            ))
-        }
-    }
-}
-
 /// 创建 OCR 路由
 pub fn create_routes(remote_config: RemoteOcrConfig) -> Router {
     let state = OcrState {
@@ -189,6 +140,5 @@ pub fn create_routes(remote_config: RemoteOcrConfig) -> Router {
     Router::new()
         .route("/health", get(health_check))
         .route("/single_pic", post(single_pic_remote))
-        .route("/single_pic_local", post(single_pic_local))
         .with_state(state)
 }
