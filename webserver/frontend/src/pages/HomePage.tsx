@@ -45,12 +45,12 @@ export default function HomePage() {
         <div className="home-page">
             <section className="hero">
                 <h1 className="hero-title">
-                    <span className="hero-icon">🦀</span>
-                    RSDE
+                    <span className="hero-icon">&#127758;</span>
+                    xy planet
                 </h1>
-                <p className="hero-subtitle">Rust Development Environment</p>
+                <p className="hero-subtitle">xy planet</p>
                 <p className="hero-description">
-                    基于 Rust 构建的高性能开发工具集，提供数据同步、配置管理、OCR 识别等功能
+                    这里是小歪星球，提供数据同步、配置管理、OCR 识别等功能
                 </p>
             </section>
 

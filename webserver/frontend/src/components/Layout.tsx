@@ -16,8 +16,9 @@ export default function Layout({ children }: LayoutProps) {
                 <div className="container">
                     <div className="header-content">
                         <Link to="/" className="logo">
-                            <span className="logo-icon">🦀</span>
-                            <span className="logo-text">RSDE</span>
+                            <span className="logo-icon">&#127758;</span>
+
+                            <span className="logo-text">xy planet</span>
                         </Link>
                         <nav className="nav">
                             <Link

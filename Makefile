@@ -109,3 +109,9 @@ fmt:
 .PHONY: clippy
 clippy:
 	cargo clippy --all-targets --all-features
+
+.PHONY: run-apiserver
+run-apiserver:
+	cd webserver && make build
+	cd ..
+	API_CONFIG="manifest/dev/remote_ocr.toml" cargo run -p apiserver
