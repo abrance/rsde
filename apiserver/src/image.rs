@@ -43,18 +43,18 @@ fn generate_filename(extension: &str) -> String {
         .unwrap()
         .as_millis();
     let random: u32 = rand::random();
-    format!("{}_{:08x}.{}", timestamp, random, extension)
+    format!("{timestamp}_{random:08x}.{extension}")
 }
 
 /// 从 content-type 或文件名获取扩展名
 fn get_extension(filename: Option<&str>, content_type: Option<&str>) -> String {
     // 先尝试从文件名提取
-    if let Some(name) = filename {
-        if let Some(ext) = name.rsplit('.').next() {
-            if ext.len() <= 5 && ext != name {
-                return ext.to_lowercase();
-            }
-        }
+    if let Some(name) = filename
+        && let Some(ext) = name.rsplit('.').next()
+        && ext.len() <= 5
+        && ext != name
+    {
+        return ext.to_lowercase();
     }
 
     // 从 content-type 推断
@@ -81,18 +81,18 @@ pub async fn handle_upload(
         tokio::fs::create_dir_all(&storage_path)
             .await
             .map_err(|e| {
-                error!("创建存储目录失败: {}", e);
+                error!("创建存储目录失败: {e}");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("创建存储目录失败: {}", e),
+                    format!("创建存储目录失败: {e}"),
                 )
             })?;
     }
 
     // 处理上传的文件
     while let Some(field) = multipart.next_field().await.map_err(|e| {
-        error!("读取上传字段失败: {}", e);
-        (StatusCode::BAD_REQUEST, format!("读取上传字段失败: {}", e))
+        error!("读取上传字段失败: {e}");
+        (StatusCode::BAD_REQUEST, format!("读取上传字段失败: {e}"))
     })? {
         let name = field.name().unwrap_or("").to_string();
         if name != "file" && name != "files" {
@@ -116,28 +116,28 @@ pub async fn handle_upload(
 
         // 读取文件数据
         let data = field.bytes().await.map_err(|e| {
-            error!("读取文件数据失败: {}", e);
-            (StatusCode::BAD_REQUEST, format!("读取文件数据失败: {}", e))
+            error!("读取文件数据失败: {e}");
+            (StatusCode::BAD_REQUEST, format!("读取文件数据失败: {e}"))
         })?;
 
         // 保存文件
         let mut file = tokio::fs::File::create(&file_path).await.map_err(|e| {
-            error!("创建文件失败: {}", e);
+            error!("创建文件失败: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("创建文件失败: {}", e),
+                format!("创建文件失败: {e}"),
             )
         })?;
 
         file.write_all(&data).await.map_err(|e| {
-            error!("写入文件失败: {}", e);
+            error!("写入文件失败: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("写入文件失败: {}", e),
+                format!("写入文件失败: {e}"),
             )
         })?;
 
-        info!("文件上传成功: {}", new_filename);
+        info!("文件上传成功: {new_filename}");
 
         // 返回相对路径
         return Ok(Json(UploadResponse {
@@ -190,46 +190,40 @@ async fn cleanup_expired_files(storage_dir: &str, expire_secs: u64) {
                 match tokio::fs::metadata(&path).await {
                     Ok(metadata) => {
                         // 检查创建时间
-                        if let Ok(created) = metadata.created() {
-                            if let Ok(age) = now.duration_since(created) {
-                                if age > expire_duration {
-                                    // 文件过期，删除
-                                    let file_size = metadata.len();
-                                    match tokio::fs::remove_file(&path).await {
-                                        Ok(_) => {
-                                            deleted_files += 1;
-                                            deleted_size += file_size;
-                                            info!(
-                                                "删除过期文件: {:?}, 年龄: {:?}",
-                                                path.file_name(),
-                                                age
-                                            );
-                                        }
-                                        Err(e) => {
-                                            error!("删除文件失败 {:?}: {}", path, e);
-                                        }
-                                    }
+                        if let Ok(created) = metadata.created()
+                            && let Ok(age) = now.duration_since(created)
+                            && age > expire_duration
+                        {
+                            // 文件过期，删除
+                            let file_size = metadata.len();
+                            match tokio::fs::remove_file(&path).await {
+                                Ok(_) => {
+                                    deleted_files += 1;
+                                    deleted_size += file_size;
+                                    info!("删除过期文件: {:?}, 年龄: {:?}", path.file_name(), age);
+                                }
+                                Err(e) => {
+                                    error!("删除文件失败 {:?}: {e}", path);
                                 }
                             }
                         }
                     }
                     Err(e) => {
-                        warn!("获取文件元数据失败 {:?}: {}", path, e);
+                        warn!("获取文件元数据失败 {:?}: {e}", path);
                     }
                 }
             }
 
             if deleted_files > 0 {
                 info!(
-                    "清理完成: 扫描 {} 个文件, 删除 {} 个过期文件, 释放 {} 字节",
-                    total_files, deleted_files, deleted_size
+                    "清理完成: 扫描 {total_files} 个文件, 删除 {deleted_files} 个过期文件, 释放 {deleted_size} 字节"
                 );
             } else {
-                info!("清理完成: 扫描 {} 个文件, 无过期文件", total_files);
+                info!("清理完成: 扫描 {total_files} 个文件, 无过期文件");
             }
         }
         Err(e) => {
-            error!("读取存储目录失败: {}", e);
+            error!("读取存储目录失败: {e}");
         }
     }
 }
@@ -248,10 +242,7 @@ pub fn start_cleanup_task(config: ImageHostingConfig) {
         config.file_expire_secs
     };
 
-    info!(
-        "启动文件清理任务: 间隔={}秒, 过期时间={}秒",
-        cleanup_interval, file_expire
-    );
+    info!("启动文件清理任务: 间隔={cleanup_interval}秒, 过期时间={file_expire}秒");
 
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(cleanup_interval));

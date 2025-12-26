@@ -50,12 +50,12 @@ async fn main() -> anyhow::Result<()> {
 
     // 前端静态文件目录
     let frontend_dir = "webserver/frontend/dist";
-    let index_file = format!("{}/index.html", frontend_dir);
+    let index_file = format!("{frontend_dir}/index.html");
 
     // 检查前端文件是否存在
     let has_frontend = std::path::Path::new(&frontend_dir).exists();
     if !has_frontend {
-        info!("⚠️  前端文件未找到: {}", frontend_dir);
+        info!("⚠️  前端文件未找到: {frontend_dir}");
         info!("   运行 'cd webserver/frontend && npm run build' 构建前端");
     }
 
@@ -71,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
     // 如果前端文件存在，添加静态文件服务
     if has_frontend {
         app = app
-            .nest_service("/assets", ServeDir::new(format!("{}/assets", frontend_dir)))
+            .nest_service("/assets", ServeDir::new(format!("{frontend_dir}/assets")))
             .fallback_service(
                 ServeDir::new(frontend_dir).not_found_service(ServeFile::new(&index_file)),
             );
