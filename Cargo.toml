@@ -23,6 +23,7 @@ tracing-subscriber = { version = "0.3", features = [
 ] }
 tracing-appender = "0.2"
 uuid = { version = "1.9", features = ["serde", "v4"] }
-axum = "0.7"
+axum = { version = "0.7", features = ["multipart"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "fs", "trace"] }
+rand = "0.8"

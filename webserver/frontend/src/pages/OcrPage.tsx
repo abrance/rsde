@@ -4,9 +4,44 @@ import './ToolPage.css'
 export default function OcrPage() {
     const [activeTab, setActiveTab] = useState<'overview' | 'recognize' | 'history'>('overview')
     const [imagePath, setImagePath] = useState('')
+    const [uploadedPath, setUploadedPath] = useState('')
     const [includePosition, setIncludePosition] = useState(false)
     const [result, setResult] = useState<string>('')
     const [loading, setLoading] = useState(false)
+    const [uploading, setUploading] = useState(false)
+
+    const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0]
+        if (!file) return
+
+        setUploading(true)
+        setResult('')
+        setUploadedPath('')
+
+        try {
+            const formData = new FormData()
+            formData.append('file', file)
+
+            const response = await fetch('/api/image/upload', {
+                method: 'POST',
+                body: formData,
+            })
+
+            const data = await response.json()
+
+            if (data.success && data.path) {
+                setUploadedPath(data.path)
+                setImagePath(data.path)
+                setResult(`✅ 图片上传成功: ${data.path}`)
+            } else {
+                setResult(`❌ 上传失败: ${data.error || '未知错误'}`)
+            }
+        } catch (error) {
+            setResult(`❌ 上传请求失败: ${error}`)
+        } finally {
+            setUploading(false)
+        }
+    }
 
     const handleRecognize = async () => {
         if (!imagePath.trim()) {
@@ -129,41 +164,58 @@ curl -X POST http://localhost:8080/ocr/single_pic \\
                 {activeTab === 'recognize' && (
                     <div className="recognize-panel">
                         <div className="card">
-                            <h2>图片识别</h2>
+                            <h2>图片上传与识别</h2>
+
                             <div className="form-group">
-                                <label htmlFor="imagePath">图片路径</label>
+                                <label htmlFor="imageFile">选择图片</label>
                                 <input
-                                    id="imagePath"
-                                    type="text"
+                                    id="imageFile"
+                                    type="file"
                                     className="input"
-                                    placeholder="/path/to/image.png"
-                                    value={imagePath}
-                                    onChange={(e) => setImagePath(e.target.value)}
+                                    accept="image/*"
+                                    onChange={handleFileUpload}
+                                    disabled={uploading}
                                 />
+                                {uploading && <p className="loading-text">上传中...</p>}
                             </div>
 
-                            <div className="form-group">
-                                <label className="checkbox-label">
-                                    <input
-                                        type="checkbox"
-                                        checked={includePosition}
-                                        onChange={(e) => setIncludePosition(e.target.checked)}
-                                    />
-                                    包含坐标信息
-                                </label>
-                            </div>
+                            {uploadedPath && (
+                                <>
+                                    <div className="form-group">
+                                        <label htmlFor="imagePath">已上传图片路径</label>
+                                        <input
+                                            id="imagePath"
+                                            type="text"
+                                            className="input"
+                                            value={imagePath}
+                                            readOnly
+                                        />
+                                    </div>
 
-                            <button
-                                className="btn"
-                                onClick={handleRecognize}
-                                disabled={loading}
-                            >
-                                {loading ? '识别中...' : '开始识别'}
-                            </button>
+                                    <div className="form-group">
+                                        <label className="checkbox-label">
+                                            <input
+                                                type="checkbox"
+                                                checked={includePosition}
+                                                onChange={(e) => setIncludePosition(e.target.checked)}
+                                            />
+                                            包含坐标信息
+                                        </label>
+                                    </div>
+
+                                    <button
+                                        className="btn"
+                                        onClick={handleRecognize}
+                                        disabled={loading}
+                                    >
+                                        {loading ? '识别中...' : '📝 文字识别'}
+                                    </button>
+                                </>
+                            )}
 
                             {result && (
                                 <div className="result-box">
-                                    <h3>识别结果</h3>
+                                    <h3>结果</h3>
                                     <pre className="result-content">{result}</pre>
                                 </div>
                             )}

@@ -3,6 +3,7 @@
 //! 整合 pic_recog, rsync, rc 等所有服务的配置定义
 
 pub mod apiserver;
+pub mod image_host;
 pub mod ocr;
 pub mod rsync;
 
@@ -30,6 +31,10 @@ pub struct GlobalConfig {
     /// Rsync 配置
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rsync: Option<rsync::RsyncConfig>,
+
+    /// 图床配置
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_hosting: Option<image_host::ImageHostingConfig>,
 }
 
 impl ConfigLoader for GlobalConfig {

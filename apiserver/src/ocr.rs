@@ -19,6 +19,8 @@ use tracing::{error, info};
 pub struct OcrState {
     /// 远程 OCR 配置
     pub remote_config: Arc<RemoteOcrConfig>,
+    /// 图片存储目录（用于解析相对路径）
+    pub storage_dir: Arc<String>,
 }
 
 /// OCR 单张图片请求体
@@ -92,7 +94,18 @@ async fn single_pic_remote(
         payload.image_path, payload.include_position
     );
 
-    let image_path = payload.image_path.clone();
+    // 判断是绝对路径还是相对路径
+    let image_path = if payload.image_path.starts_with('/') || payload.image_path.contains(':') {
+        // 绝对路径（Unix 或 Windows）
+        payload.image_path.clone()
+    } else {
+        // 相对路径，从 storage_dir 解析
+        let storage_dir = state.storage_dir.as_ref();
+        format!("{}/{}", storage_dir, payload.image_path)
+    };
+
+    info!("解析后的图片路径: {}", image_path);
+
     let remote_config = state.remote_config.clone();
     let include_position = payload.include_position;
 
@@ -132,9 +145,10 @@ async fn single_pic_remote(
 }
 
 /// 创建 OCR 路由
-pub fn create_routes(remote_config: RemoteOcrConfig) -> Router {
+pub fn create_routes(remote_config: RemoteOcrConfig, storage_dir: String) -> Router {
     let state = OcrState {
         remote_config: Arc::new(remote_config),
+        storage_dir: Arc::new(storage_dir),
     };
 
     Router::new()

@@ -1,3 +1,4 @@
+mod image;
 mod ocr;
 
 use axum::{Router, http::StatusCode};
@@ -33,7 +34,13 @@ async fn main() -> anyhow::Result<()> {
     let remote_ocr_config = global_config
         .remote_ocr
         .expect("配置文件中缺少 [remote_ocr] 部分");
+    let image_hosting_config = global_config
+        .image_hosting
+        .expect("配置文件中缺少 [image_hosting] 部分");
     info!("配置加载成功");
+
+    // 启动图片清理任务
+    image::start_cleanup_task(image_hosting_config.clone());
 
     // 配置 CORS
     let cors = CorsLayer::new()
@@ -55,7 +62,11 @@ async fn main() -> anyhow::Result<()> {
     // 构建路由
     let mut app = Router::new()
         // API 路由
-        .nest("/api/ocr", ocr::create_routes(remote_ocr_config));
+        .nest(
+            "/api/ocr",
+            ocr::create_routes(remote_ocr_config, image_hosting_config.storage_dir.clone()),
+        )
+        .nest("/api/image", image::create_routes(image_hosting_config));
 
     // 如果前端文件存在，添加静态文件服务
     if has_frontend {
@@ -88,6 +99,7 @@ async fn main() -> anyhow::Result<()> {
     info!("API 接口:");
     info!("  POST http://localhost:3000/api/ocr/single_pic - 远程 OCR");
     info!("  GET  http://localhost:3000/api/ocr/health - 健康检查");
+    info!("  POST http://localhost:3000/api/image/upload - 图片上传");
     if has_frontend {
         info!("前端页面:");
         info!("  http://localhost:3000/ - Web UI");
