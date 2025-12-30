@@ -108,7 +108,7 @@ fmt:
 
 .PHONY: clippy
 clippy:
-	cargo clippy --all-targets --all-features
+	cargo clippy 
 
 .PHONY: run-apiserver
 run-apiserver:

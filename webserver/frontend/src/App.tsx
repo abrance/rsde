@@ -4,6 +4,7 @@ import HomePage from './pages/HomePage'
 import RsyncPage from './pages/RsyncPage'
 import RcPage from './pages/RcPage'
 import OcrPage from './pages/OcrPage'
+import AnyboxPage from './pages/AnyboxPage'
 import './App.css'
 
 function App() {
@@ -15,6 +16,7 @@ function App() {
                     <Route path="/rsync" element={<RsyncPage />} />
                     <Route path="/rc" element={<RcPage />} />
                     <Route path="/ocr" element={<OcrPage />} />
+                    <Route path="/anybox" element={<AnyboxPage />} />
                 </Routes>
             </Layout>
         </Router>

@@ -45,6 +45,12 @@ export default function Layout({ children }: LayoutProps) {
                             >
                                 OCR
                             </Link>
+                            <Link
+                                to="/anybox"
+                                className={`nav-link ${isActive('/anybox') ? 'active' : ''}`}
+                            >
+                                Anybox
+                            </Link>
                         </nav>
                     </div>
                 </div>

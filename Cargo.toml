@@ -1,5 +1,5 @@
 [workspace]
-members = ["rsync", "rc", "common/*", "apiserver", "pic_recog"]
+members = ["rsync", "rc", "common/*", "apiserver", "pic_recog", "anybox"]
 resolver = "2"
 
 [workspace.package]
@@ -27,3 +27,9 @@ axum = { version = "0.7", features = ["multipart"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "fs", "trace"] }
 rand = "0.8"
+redis = { version = "0.27", features = [
+    "tokio-comp",
+    "aio",
+    "connection-manager",
+] }
+chrono = { version = "0.4", features = ["serde"] }

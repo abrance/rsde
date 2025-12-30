@@ -2,9 +2,11 @@
 //!
 //! 整合 pic_recog, rsync, rc 等所有服务的配置定义
 
+pub mod anybox;
 pub mod apiserver;
 pub mod image_host;
 pub mod ocr;
+pub mod redis;
 pub mod rsync;
 
 use serde::{Deserialize, Serialize};
@@ -35,6 +37,14 @@ pub struct GlobalConfig {
     /// 图床配置
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_hosting: Option<image_host::ImageHostingConfig>,
+
+    /// Redis 配置
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub redis: Option<redis::RedisConfig>,
+
+    /// Anybox 配置
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anybox: Option<anybox::AnyboxConfig>,
 }
 
 impl ConfigLoader for GlobalConfig {
