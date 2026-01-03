@@ -43,5 +43,5 @@ COPY --from=frontend-builder /build/webserver/frontend/dist /app/webserver/front
 # Set the working directory
 WORKDIR /app
 
-# Run the rsync service by default
-CMD ["rsync"]
+# Run the apiserver service by default
+CMD ["apiserver"]

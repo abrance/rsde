@@ -1,4 +1,4 @@
-.PHONY: help build clean test rsync rc webserver apiserver release release-linux-x86_64 release-linux-aarch64 release-darwin-x86_64 release-darwin-aarch64
+.PHONY: help build clean test rsync rc webserver apiserver release release-linux-x86_64 release-linux-aarch64 release-darwin-x86_64 release-darwin-aarch64 docker-build docker-push
 
 # Default target
 help:
@@ -7,6 +7,8 @@ help:
 	@echo "  rsync                 - Build only rsync binary"
 	@echo "  rc                    - Build only rc binary"
 	@echo "  apiserver             - Build only apiserver binary"
+	@echo "  docker-build          - Build Docker image (xy:latest)"
+	@echo "  docker-push           - Build and push Docker image"
 	@echo "  release               - Build release binaries for all platforms"
 	@echo "  release-linux-x86_64  - Build release binaries for Linux x86_64"
 	@echo "  release-linux-aarch64 - Build release binaries for Linux aarch64"
@@ -115,3 +117,16 @@ run-apiserver:
 	cd webserver && make build
 	cd ..
 	API_CONFIG="manifest/dev/remote_ocr.toml" cargo run -p apiserver
+
+# Docker targets
+.PHONY: docker-build
+docker-build:
+	@echo "Building Docker image xy:latest..."
+	docker build -t xy:latest -f Dockerfile .
+
+.PHONY: docker-push
+docker-push: docker-build
+	@echo "Pushing Docker image..."
+	@read -p "Enter image registry (e.g., ghcr.io/abrance/rsde/xy): " REGISTRY; \
+	docker tag xy:latest $$REGISTRY:latest; \
+	docker push $$REGISTRY:latest

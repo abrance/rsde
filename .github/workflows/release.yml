@@ -208,7 +208,7 @@ jobs:
         
         Docker image is available at:
         ```
-        docker pull ghcr.io/${{ github.repository }}/rsync:${{ github.ref_name }}
+        docker pull ghcr.io/${{ github.repository }}/xy:${{ github.ref_name }}
         ```
         
         ## Helm Chart
@@ -265,7 +265,7 @@ jobs:
       id: meta
       uses: docker/metadata-action@v5
       with:
-        images: ghcr.io/${{ github.repository }}/rsync
+        images: ghcr.io/${{ github.repository }}/xy
         tags: |
           type=semver,pattern={{version}}
           type=semver,pattern={{major}}.{{minor}}

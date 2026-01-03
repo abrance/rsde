@@ -26,7 +26,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}/rsync
+  IMAGE_NAME: ${{ github.repository }}/xy
 
 jobs:
   test:
@@ -206,11 +206,11 @@ jobs:
     
     - name: Build Docker image for Kind
       run: |
-        docker build -t rsync:test -f Dockerfile .
+        docker build -t xy:test -f Dockerfile .
     
     - name: Load image into Kind
       run: |
-        kind load docker-image rsync:test --name rsync-test
+        kind load docker-image xy:test --name rsync-test
     
     - name: Deploy with Helm
       run: |
