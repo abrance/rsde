@@ -36,6 +36,7 @@ spec:
         {{- end }}
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: ["apiserver"]
         ports:
         - name: http
           containerPort: {{ .Values.service.targetPort }}
@@ -53,7 +54,7 @@ spec:
           {{- toYaml . | nindent 10 }}
         {{- end }}
         env:
-        - name: CONFIG_PATH
+        - name: API_CONFIG
           value: "/etc/rsde/config.toml"
         {{- with .Values.env }}
         {{- toYaml . | nindent 8 }}

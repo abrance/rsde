@@ -242,3 +242,5 @@ webserver/frontend/node_modules/
 webserver/frontend/dist/
 webserver/frontend/.vite/
 webserver/frontend/*.local
+
+values.yaml
