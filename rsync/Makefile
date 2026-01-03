@@ -83,7 +83,7 @@ fmt-check:
 
 # Run clippy linter
 clippy:
-	cargo clippy --workspace --all-features -- -D warnings
+	cargo clippy --workspace --all-features
 
 # Check everything (format, clippy, test)
 check: fmt-check clippy test

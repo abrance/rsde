@@ -1,0 +1,13 @@
+apiVersion: v2
+name: rsde
+description: A Helm chart for deploying RSDE apiserver with Anybox, OCR and image hosting services
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - apiserver
+  - anybox
+  - ocr
+  - pastebin
+maintainers:
+  - name: RSDE Team

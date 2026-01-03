@@ -1,0 +1,112 @@
+# 自定义配置示例
+# 复制此文件并根据您的环境进行修改
+
+# 基本配置
+namespace: xy
+replicaCount: 1
+
+# 镜像配置
+image:
+  repository: your-registry.com/rsde-apiserver
+  tag: "v0.1.0"
+  pullPolicy: IfNotPresent
+
+# 如果使用私有镜像仓库
+# imagePullSecrets:
+#   - name: regcred
+
+# Service 配置
+# 选项: ClusterIP, NodePort, LoadBalancer
+service:
+  type: ClusterIP
+  port: 3000
+  # 如果使用 NodePort
+  # nodePort: 30000
+
+# 资源配置 - 根据实际负载调整
+resources:
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+  requests:
+    cpu: 1000m
+    memory: 1Gi
+
+# 持久化存储 - 图片上传需要
+persistence:
+  enabled: true
+  storageClass: "your-storage-class"  # 例如: nfs-client, local-path
+  size: 20Gi
+  accessMode: ReadWriteOnce
+
+# 应用配置
+config:
+  apiserver:
+    listen_address: "0.0.0.0:3000"
+    log_level: "info"  # debug, info, warn, error
+    cors_enabled: true
+
+  # Anybox Redis 配置 - 请修改为您的 Redis 地址
+  anybox:
+    redis_url: "redis://:your-password@your-redis-host:6379/0"
+    key_prefix: "anybox"
+    cleanup_interval_secs: 3600
+
+  # OCR 配置 - 根据实际情况修改
+  remote_ocr:
+    perm_url: "https://web.xxx.com/api/perm/single"
+    start_url: "https://web.xxx.com/api/ocr/image/beta"
+    status_url: "https://web.xxx.com/api/ocr/image/beta/status"
+    auth_token: "your-auth-token"
+    auth_uuid: "your-auth-uuid"
+    auth_cookie: "your-auth-cookie"
+    origin: "https://web.xxx.com"
+    mode: "single"
+    timeout_secs: 60
+    poll_interval_ms: 3000
+    poll_max_attempts: 20
+    poll_initial_delay_ms: 500
+    accept_invalid_certs: false
+
+  # 图床配置
+  image_hosting:
+    storage_dir: "/app/uploads"
+    cleanup_interval_secs: 7200  # 2小时
+    file_expire_secs: 7200       # 2小时
+
+# 环境变量
+env:
+  - name: RUST_LOG
+    value: "info"
+  - name: TZ
+    value: "Asia/Shanghai"
+
+# 节点选择器 - 如果需要调度到特定节点
+# nodeSelector:
+#   disktype: ssd
+#   zone: cn-north-1a
+
+# 容忍度 - 允许调度到有特定污点的节点
+# tolerations:
+#   - key: "dedicated"
+#     operator: "Equal"
+#     value: "rsde"
+#     effect: "NoSchedule"
+
+# 亲和性 - 高级调度策略
+# affinity:
+#   nodeAffinity:
+#     preferredDuringSchedulingIgnoredDuringExecution:
+#       - weight: 100
+#         preference:
+#           matchExpressions:
+#             - key: node-role
+#               operator: In
+#               values:
+#                 - worker
+
+# Pod 注解
+# podAnnotations:
+#   prometheus.io/scrape: "true"
+#   prometheus.io/port: "3000"
+#   prometheus.io/path: "/metrics"

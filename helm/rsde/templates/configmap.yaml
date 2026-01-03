@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rsde.fullname" . }}-config
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "rsde.labels" . | nindent 4 }}
+data:
+  config.toml: |
+    # RSDE apiserver 配置文件
+    # 由 Helm chart 自动生成
+
+    [apiserver]
+    listen_address = {{ .Values.config.apiserver.listen_address | quote }}
+    log_level = {{ .Values.config.apiserver.log_level | quote }}
+    cors_enabled = {{ .Values.config.apiserver.cors_enabled }}
+
+    [remote_ocr]
+    perm_url = {{ .Values.config.remote_ocr.perm_url | quote }}
+    start_url = {{ .Values.config.remote_ocr.start_url | quote }}
+    status_url = {{ .Values.config.remote_ocr.status_url | quote }}
+    auth_token = {{ .Values.config.remote_ocr.auth_token | quote }}
+    auth_uuid = {{ .Values.config.remote_ocr.auth_uuid | quote }}
+    auth_cookie = {{ .Values.config.remote_ocr.auth_cookie | quote }}
+    origin = {{ .Values.config.remote_ocr.origin | quote }}
+    mode = {{ .Values.config.remote_ocr.mode | quote }}
+    timeout_secs = {{ .Values.config.remote_ocr.timeout_secs }}
+    poll_interval_ms = {{ .Values.config.remote_ocr.poll_interval_ms }}
+    poll_max_attempts = {{ .Values.config.remote_ocr.poll_max_attempts }}
+    poll_initial_delay_ms = {{ .Values.config.remote_ocr.poll_initial_delay_ms }}
+    accept_invalid_certs = {{ .Values.config.remote_ocr.accept_invalid_certs }}
+
+    [image_hosting]
+    storage_dir = {{ .Values.config.image_hosting.storage_dir | quote }}
+    cleanup_interval_secs = {{ .Values.config.image_hosting.cleanup_interval_secs }}
+    file_expire_secs = {{ .Values.config.image_hosting.file_expire_secs }}
+
+    [anybox]
+    redis_url = {{ .Values.config.anybox.redis_url | quote }}
+    key_prefix = {{ .Values.config.anybox.key_prefix | quote }}
+    cleanup_interval_secs = {{ .Values.config.anybox.cleanup_interval_secs }}
