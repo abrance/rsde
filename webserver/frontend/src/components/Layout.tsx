@@ -62,7 +62,7 @@ export default function Layout({ children }: LayoutProps) {
             </main>
             <footer className="footer">
                 <div className="container">
-                    <p>© 2025 RSDE - Rust Development Environment</p>
+                    <p>© 2026 小歪星球</p>
                 </div>
             </footer>
         </div>
