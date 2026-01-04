@@ -1,21 +1,15 @@
 [package]
 name = "util"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-log = "0.4"
-snafu = { version = "0.8.9", features = ["std", "rust_1_81", "alloc"] }
-tracing = { version = "0.1.41", features = [
-    "async-await",
-    "log-always",
-    "max_level_debug",
-] }
-tracing-subscriber = { version = "0.3.20", features = [
-    "env-filter",
-    "json",
-    "serde_json",
-] }
-tracing-appender = "0.2.3"
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+snafu.workspace = true
+tracing = { workspace = true, features = ["async-await"] }
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+reqwest.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }
