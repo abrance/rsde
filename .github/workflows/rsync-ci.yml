@@ -214,12 +214,15 @@ jobs:
       run: |
         kind load docker-image xy:test --name rsde-test
     
+    - name: Create namespace
+      run: |
+        kubectl create namespace xy
+    
     - name: Deploy Redis for testing
       run: |
         helm repo add bitnami https://charts.bitnami.com/bitnami
         helm install test-redis bitnami/redis \
           --namespace xy \
-          --create-namespace \
           --set auth.password=testpass_2024 \
           --set master.persistence.enabled=false \
           --set replica.replicaCount=0 \
