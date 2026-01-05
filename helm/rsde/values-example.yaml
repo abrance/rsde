@@ -7,8 +7,8 @@ replicaCount: 1
 
 # 镜像配置
 image:
-  repository: your-registry.com/rsde-apiserver
-  tag: "v0.1.0"
+  repository: ghcr.io/abrance/rsde/xy
+  tag: "latest"
   pullPolicy: IfNotPresent
 
 # 如果使用私有镜像仓库
@@ -32,6 +32,25 @@ resources:
     cpu: 1000m
     memory: 1Gi
 
+# 健康检查配置
+livenessProbe:
+  httpGet:
+    path: /api/anybox/health
+    port: 3000
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /api/anybox/health
+    port: 3000
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
 # 持久化存储 - 图片上传需要
 persistence:
   enabled: true
@@ -48,19 +67,20 @@ config:
 
   # Anybox Redis 配置 - 请修改为您的 Redis 地址
   anybox:
-    redis_url: "redis://:your-password@your-redis-host:6379/0"
+    redis_url: "redis://:your-redis-password@redis-host.namespace.svc.cluster.local:6379/0"
     key_prefix: "anybox"
     cleanup_interval_secs: 3600
 
-  # OCR 配置 - 根据实际情况修改
+  # OCR 配置 - 如果不需要 OCR 功能，可以删除整个 remote_ocr 配置块
+  # 注意：这里需要替换为您实际的 OCR 服务地址和认证信息
   remote_ocr:
-    perm_url: "https://web.xxx.com/api/perm/single"
-    start_url: "https://web.xxx.com/api/ocr/image/beta"
-    status_url: "https://web.xxx.com/api/ocr/image/beta/status"
-    auth_token: "your-auth-token"
-    auth_uuid: "your-auth-uuid"
-    auth_cookie: "your-auth-cookie"
-    origin: "https://web.xxx.com"
+    perm_url: "https://your-ocr-service.com/api/perm/single"
+    start_url: "https://your-ocr-service.com/api/ocr/image/beta"
+    status_url: "https://your-ocr-service.com/api/ocr/image/beta/status"
+    auth_token: "your-auth-token-here"
+    auth_uuid: "your-auth-uuid-here"
+    auth_cookie: "your-auth-cookie-here"
+    origin: "https://your-ocr-service.com"
     mode: "single"
     timeout_secs: 60
     poll_interval_ms: 3000

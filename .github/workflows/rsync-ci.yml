@@ -110,11 +110,12 @@ jobs:
         version: 'latest'
     
     - name: Helm lint
-      run: helm lint helm/rsde
+      run: helm lint helm/rsde --values helm/rsde/values-example.yaml
     
     - name: Helm template dry-run
       run: |
         helm template rsde-apiserver ./helm/rsde \
+          --values helm/rsde/values-example.yaml \
           --set image.repository=xy \
           --set image.tag=test \
           --debug
@@ -231,9 +232,11 @@ jobs:
       run: |
         helm install rsde-apiserver ./helm/rsde \
           --namespace xy \
+          --values helm/rsde/values-example.yaml \
           --set image.repository=xy \
           --set image.tag=test \
           --set image.pullPolicy=IfNotPresent \
+          --set config.anybox.redis_url="redis://:testpass_2024@test-redis-master.xy.svc.cluster.local/" \
           --wait --timeout 5m
     
     - name: Check deployment status
