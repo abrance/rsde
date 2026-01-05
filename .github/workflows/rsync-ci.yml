@@ -110,11 +110,12 @@ jobs:
         version: 'latest'
     
     - name: Helm lint
-      run: helm lint rsync/helm/rsync
+      run: helm lint helm/rsde
     
     - name: Helm template dry-run
       run: |
-        helm template rsync ./rsync/helm/rsync \
+        helm template rsde-apiserver ./helm/rsde \
+          --set image.repository=xy \
           --set image.tag=test \
           --debug
 
@@ -196,7 +197,7 @@ jobs:
     - name: Set up Kind (Kubernetes in Docker)
       uses: helm/kind-action@v1
       with:
-        cluster_name: rsync-test
+        cluster_name: rsde-test
         wait: 120s
     
     - name: Verify cluster
@@ -210,51 +211,67 @@ jobs:
     
     - name: Load image into Kind
       run: |
-        kind load docker-image xy:test --name rsync-test
+        kind load docker-image xy:test --name rsde-test
+    
+    - name: Create namespace
+      run: |
+        kubectl create namespace xy
+    
+    - name: Deploy Redis for testing
+      run: |
+        helm repo add bitnami https://charts.bitnami.com/bitnami
+        helm install test-redis bitnami/redis \
+          --namespace xy \
+          --set auth.password=testpass_2024 \
+          --set master.persistence.enabled=false \
+          --set replica.replicaCount=0 \
+          --wait --timeout 3m
     
     - name: Deploy with Helm
       run: |
-        helm install rsync ./rsync/helm/rsync \
+        helm install rsde-apiserver ./helm/rsde \
+          --namespace xy \
+          --set image.repository=xy \
           --set image.tag=test \
           --set image.pullPolicy=IfNotPresent \
           --wait --timeout 5m
     
     - name: Check deployment status
       run: |
-        kubectl get all
-        kubectl get pods -o wide
+        kubectl get all -n xy
+        kubectl get pods -n xy -o wide
     
     - name: Wait for pod to be ready
       run: |
-        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=rsync --timeout=300s
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=rsde-apiserver -n xy --timeout=300s
     
     - name: Check pod logs
       run: |
-        kubectl logs -l app.kubernetes.io/name=rsync --tail=50
+        kubectl logs -l app.kubernetes.io/name=rsde-apiserver -n xy --tail=50
     
     - name: Test application
       run: |
-        POD_NAME=$(kubectl get pods -l app.kubernetes.io/name=rsync -o jsonpath='{.items[0].metadata.name}')
+        POD_NAME=$(kubectl get pods -l app.kubernetes.io/name=rsde-apiserver -n xy -o jsonpath='{.items[0].metadata.name}')
         echo "Testing pod: $POD_NAME"
         
         # Check if the application is running
-        kubectl exec $POD_NAME -- ps aux | grep rsync || true
+        kubectl exec -n xy $POD_NAME -- ps aux | grep apiserver || true
         
-        # Check if config is loaded
-        kubectl logs $POD_NAME | grep "Successfully loaded" || echo "Config loading check: see logs above"
+        # Test health endpoint
+        kubectl exec -n xy $POD_NAME -- wget -q -O- http://localhost:3000/api/anybox/health || echo "Health check failed"
         
-        # Check demo output if enabled
-        kubectl exec $POD_NAME -- cat /app/data/output.txt || echo "No output file yet"
+        # Check logs
+        kubectl logs -n xy $POD_NAME --tail=20
     
     - name: Helm test (if test hooks exist)
       run: |
-        helm test rsync || echo "No helm tests defined"
+        helm test rsde-apiserver -n xy || echo "No helm tests defined"
     
     - name: Cleanup
       if: always()
       run: |
-        helm uninstall rsync || true
-        kubectl delete all --all || true
+        helm uninstall rsde-apiserver -n xy || true
+        kubectl delete namespace xy || true
 
   release:
     name: Create Release
@@ -268,11 +285,11 @@ jobs:
     
     - name: Package Helm chart
       run: |
-        helm package rsync/helm/rsync -d .
+        helm package helm/rsde -d .
     
     - name: Upload Helm chart artifact
       uses: actions/upload-artifact@v4
       with:
         name: helm-chart
-        path: rsync-*.tgz
+        path: rsde-*.tgz
         retention-days: 30
