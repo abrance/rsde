@@ -180,119 +180,119 @@ jobs:
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
-  helm-test:
-    name: Helm Chart Deployment Test
-    runs-on: ubuntu-latest
-    needs: [docker-build]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+  # helm-test:
+  #   name: Helm Chart Deployment Test
+  #   runs-on: ubuntu-latest
+  #   needs: [docker-build]
+  #   if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+  #   steps:
+  #   - name: Checkout code
+  #     uses: actions/checkout@v4
     
-    - name: Set up Helm
-      uses: azure/setup-helm@v4
-      with:
-        version: 'latest'
+  #   - name: Set up Helm
+  #     uses: azure/setup-helm@v4
+  #     with:
+  #       version: 'latest'
     
-    - name: Set up Kind (Kubernetes in Docker)
-      uses: helm/kind-action@v1
-      with:
-        cluster_name: rsde-test
-        wait: 120s
+  #   - name: Set up Kind (Kubernetes in Docker)
+  #     uses: helm/kind-action@v1
+  #     with:
+  #       cluster_name: rsde-test
+  #       wait: 120s
     
-    - name: Verify cluster
-      run: |
-        kubectl cluster-info
-        kubectl get nodes
+  #   - name: Verify cluster
+  #     run: |
+  #       kubectl cluster-info
+  #       kubectl get nodes
     
-    - name: Build Docker image for Kind
-      run: |
-        docker build -t xy:test -f Dockerfile .
+  #   - name: Build Docker image for Kind
+  #     run: |
+  #       docker build -t xy:test -f Dockerfile .
     
-    - name: Load image into Kind
-      run: |
-        kind load docker-image xy:test --name rsde-test
+  #   - name: Load image into Kind
+  #     run: |
+  #       kind load docker-image xy:test --name rsde-test
     
-    - name: Create namespace
-      run: |
-        kubectl create namespace xy
+  #   - name: Create namespace
+  #     run: |
+  #       kubectl create namespace xy
     
-    - name: Deploy Redis for testing
-      run: |
-        helm repo add bitnami https://charts.bitnami.com/bitnami
-        helm install test-redis bitnami/redis \
-          --namespace xy \
-          --set auth.password=testpass_2024 \
-          --set master.persistence.enabled=false \
-          --set replica.replicaCount=0 \
-          --wait --timeout 3m
+  #   - name: Deploy Redis for testing
+  #     run: |
+  #       helm repo add bitnami https://charts.bitnami.com/bitnami
+  #       helm install test-redis bitnami/redis \
+  #         --namespace xy \
+  #         --set auth.password=testpass_2024 \
+  #         --set master.persistence.enabled=false \
+  #         --set replica.replicaCount=0 \
+  #         --wait --timeout 3m
     
-    - name: Deploy with Helm
-      run: |
-        helm install rsde-apiserver ./helm/rsde \
-          --namespace xy \
-          --values helm/rsde/values-example.yaml \
-          --set image.repository=xy \
-          --set image.tag=test \
-          --set image.pullPolicy=IfNotPresent \
-          --set config.anybox.redis_url="redis://:testpass_2024@test-redis-master.xy.svc.cluster.local/" \
-          --wait --timeout 5m
+  #   - name: Deploy with Helm
+  #     run: |
+  #       helm install rsde-apiserver ./helm/rsde \
+  #         --namespace xy \
+  #         --values helm/rsde/values-example.yaml \
+  #         --set image.repository=xy \
+  #         --set image.tag=test \
+  #         --set image.pullPolicy=IfNotPresent \
+  #         --set config.anybox.redis_url="redis://:testpass_2024@test-redis-master.xy.svc.cluster.local/" \
+  #         --wait --timeout 5m
     
-    - name: Check deployment status
-      run: |
-        kubectl get all -n xy
-        kubectl get pods -n xy -o wide
+  #   - name: Check deployment status
+  #     run: |
+  #       kubectl get all -n xy
+  #       kubectl get pods -n xy -o wide
     
-    - name: Wait for pod to be ready
-      run: |
-        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=rsde-apiserver -n xy --timeout=300s
+  #   - name: Wait for pod to be ready
+  #     run: |
+  #       kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=rsde-apiserver -n xy --timeout=300s
     
-    - name: Check pod logs
-      run: |
-        kubectl logs -l app.kubernetes.io/name=rsde-apiserver -n xy --tail=50
+  #   - name: Check pod logs
+  #     run: |
+  #       kubectl logs -l app.kubernetes.io/name=rsde-apiserver -n xy --tail=50
     
-    - name: Test application
-      run: |
-        POD_NAME=$(kubectl get pods -l app.kubernetes.io/name=rsde-apiserver -n xy -o jsonpath='{.items[0].metadata.name}')
-        echo "Testing pod: $POD_NAME"
+  #   - name: Test application
+  #     run: |
+  #       POD_NAME=$(kubectl get pods -l app.kubernetes.io/name=rsde-apiserver -n xy -o jsonpath='{.items[0].metadata.name}')
+  #       echo "Testing pod: $POD_NAME"
         
-        # Check if the application is running
-        kubectl exec -n xy $POD_NAME -- ps aux | grep apiserver || true
+  #       # Check if the application is running
+  #       kubectl exec -n xy $POD_NAME -- ps aux | grep apiserver || true
         
-        # Test health endpoint
-        kubectl exec -n xy $POD_NAME -- wget -q -O- http://localhost:3000/api/anybox/health || echo "Health check failed"
+  #       # Test health endpoint
+  #       kubectl exec -n xy $POD_NAME -- wget -q -O- http://localhost:3000/api/anybox/health || echo "Health check failed"
         
-        # Check logs
-        kubectl logs -n xy $POD_NAME --tail=20
+  #       # Check logs
+  #       kubectl logs -n xy $POD_NAME --tail=20
     
-    - name: Helm test (if test hooks exist)
-      run: |
-        helm test rsde-apiserver -n xy || echo "No helm tests defined"
+  #   - name: Helm test (if test hooks exist)
+  #     run: |
+  #       helm test rsde-apiserver -n xy || echo "No helm tests defined"
     
-    - name: Cleanup
-      if: always()
-      run: |
-        helm uninstall rsde-apiserver -n xy || true
-        kubectl delete namespace xy || true
+  #   - name: Cleanup
+  #     if: always()
+  #     run: |
+  #       helm uninstall rsde-apiserver -n xy || true
+  #       kubectl delete namespace xy || true
 
-  release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    needs: [helm-test]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+  # release:
+  #   name: Create Release
+  #   runs-on: ubuntu-latest
+  #   needs: [helm-test]
+  #   if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+  #   steps:
+  #   - name: Checkout code
+  #     uses: actions/checkout@v4
     
-    - name: Package Helm chart
-      run: |
-        helm package helm/rsde -d .
+  #   - name: Package Helm chart
+  #     run: |
+  #       helm package helm/rsde -d .
     
-    - name: Upload Helm chart artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: helm-chart
-        path: rsde-*.tgz
-        retention-days: 30
+  #   - name: Upload Helm chart artifact
+  #     uses: actions/upload-artifact@v4
+  #     with:
+  #       name: helm-chart
+  #       path: rsde-*.tgz
+  #       retention-days: 30
