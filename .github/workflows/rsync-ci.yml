@@ -12,6 +12,7 @@ on:
       - 'webserver/**'
       - 'test/**'
       - 'Dockerfile'
+      - 'rc/**'
   pull_request:
     branches: [ master, main, develop ]
     paths:
@@ -22,6 +23,8 @@ on:
       - 'pic_recog/**'
       - 'webserver/**'
       - 'test/**'
+      - 'Dockerfile'
+      - 'rc/**'
 
 env:
   CARGO_TERM_COLOR: always
