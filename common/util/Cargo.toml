@@ -13,3 +13,11 @@ tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 reqwest.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
+rdkafka.workspace = true
+futures.workspace = true
+chrono.workspace = true
+
+[[test]]
+# Kafka client 集成测试
+name = "tp_kafka_client"
+path = "../../test/plan/tp_kafka_client.rs"
