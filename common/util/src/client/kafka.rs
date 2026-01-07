@@ -202,6 +202,32 @@ impl KafkaProducer {
             .map_err(|e| format!("Failed to flush producer: {}", e))?;
         Ok(())
     }
+
+    /// 检查与 Kafka 的连接是否正常（ping）
+    ///
+    /// 通过获取集群 metadata 来验证连接性
+    pub fn ping(&self, timeout: Duration) -> Result<(), String> {
+        self.producer
+            .client()
+            .fetch_metadata(None, Timeout::After(timeout))
+            .map_err(|e| format!("Ping failed: {}", e))?;
+        Ok(())
+    }
+
+    /// 获取指定 topic 的 metadata
+    pub fn get_topic_metadata(&self, topic: &str, timeout: Duration) -> Result<String, String> {
+        let metadata = self
+            .producer
+            .client()
+            .fetch_metadata(Some(topic), Timeout::After(timeout))
+            .map_err(|e| format!("Failed to fetch metadata: {}", e))?;
+
+        let mut result = format!("Cluster: {}\n", metadata.orig_broker_name());
+        result.push_str(&format!("Brokers: {}\n", metadata.brokers().len()));
+        result.push_str(&format!("Topics: {}\n", metadata.topics().len()));
+
+        Ok(result)
+    }
 }
 
 /// Kafka 消费者客户端
@@ -274,6 +300,40 @@ impl KafkaConsumer {
     /// 获取内部的 StreamConsumer 引用（用于高级用法）
     pub fn inner(&self) -> &StreamConsumer {
         &self.consumer
+    }
+
+    /// 检查与 Kafka 的连接是否正常（ping）
+    ///
+    /// 通过获取集群 metadata 来验证连接性
+    pub fn ping(&self, timeout: Duration) -> Result<(), String> {
+        self.consumer
+            .fetch_metadata(None, Timeout::After(timeout))
+            .map_err(|e| format!("Ping failed: {}", e))?;
+        Ok(())
+    }
+
+    /// 获取指定 topic 的 metadata
+    pub fn get_topic_metadata(&self, topic: &str, timeout: Duration) -> Result<String, String> {
+        let metadata = self
+            .consumer
+            .fetch_metadata(Some(topic), Timeout::After(timeout))
+            .map_err(|e| format!("Failed to fetch metadata: {}", e))?;
+
+        let mut result = format!("Cluster: {}\n", metadata.orig_broker_name());
+        result.push_str(&format!("Brokers: {}\n", metadata.brokers().len()));
+        result.push_str(&format!("Topics: {}\n", metadata.topics().len()));
+
+        for topic_meta in metadata.topics() {
+            if topic_meta.name() == topic {
+                result.push_str(&format!(
+                    "  Topic '{}': {} partitions\n",
+                    topic_meta.name(),
+                    topic_meta.partitions().len()
+                ));
+            }
+        }
+
+        Ok(result)
     }
 }
 

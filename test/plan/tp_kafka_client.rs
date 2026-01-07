@@ -311,3 +311,71 @@ async fn test_batch_send_performance() {
 
     assert!(elapsed.as_secs() < 30, "Batch send took too long");
 }
+
+/// 测试 ping 功能 - 生产者
+#[tokio::test]
+#[ignore]
+async fn test_producer_ping() {
+    let config = KafkaClientConfig::new(vec![TEST_KAFKA_BROKERS.to_string()], "test-ping-producer")
+        .with_sasl_plaintext(USERNAME, PASSWORD);
+
+    let producer = KafkaProducer::new(&config).expect("Failed to create producer");
+
+    // 测试 ping
+    let result = producer.ping(Duration::from_secs(5));
+    assert!(result.is_ok(), "Ping failed: {:?}", result.err());
+    println!("✓ Producer ping successful");
+
+    // 获取 topic metadata
+    let metadata = producer.get_topic_metadata(TEST_TOPIC, Duration::from_secs(5));
+    match metadata {
+        Ok(info) => {
+            println!("✓ Topic metadata:");
+            println!("{}", info);
+        }
+        Err(e) => println!("⚠ Failed to get topic metadata: {}", e),
+    }
+}
+
+/// 测试 ping 功能 - 消费者
+#[tokio::test]
+#[ignore]
+async fn test_consumer_ping() {
+    let config = KafkaClientConfig::new(vec![TEST_KAFKA_BROKERS.to_string()], "test-ping-consumer")
+        .with_sasl_plaintext(USERNAME, PASSWORD)
+        .with_group_id("test-ping-group");
+
+    let consumer = KafkaConsumer::new(&config).expect("Failed to create consumer");
+
+    // 测试 ping
+    let result = consumer.ping(Duration::from_secs(5));
+    assert!(result.is_ok(), "Ping failed: {:?}", result.err());
+    println!("✓ Consumer ping successful");
+
+    // 获取 topic metadata
+    let metadata = consumer.get_topic_metadata(TEST_TOPIC, Duration::from_secs(5));
+    match metadata {
+        Ok(info) => {
+            println!("✓ Topic metadata:");
+            println!("{}", info);
+        }
+        Err(e) => println!("⚠ Failed to get topic metadata: {}", e),
+    }
+}
+
+/// 测试连接失败时的 ping 行为
+#[tokio::test]
+async fn test_ping_with_invalid_broker() {
+    let config =
+        KafkaClientConfig::new(vec!["invalid-broker:9999".to_string()], "test-invalid-ping");
+
+    let producer = KafkaProducer::new(&config).expect("Producer creation should succeed");
+
+    // ping 应该失败
+    let result = producer.ping(Duration::from_secs(3));
+    assert!(result.is_err(), "Ping should fail with invalid broker");
+    println!(
+        "✓ Ping correctly failed with invalid broker: {:?}",
+        result.err()
+    );
+}
