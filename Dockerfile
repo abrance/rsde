@@ -12,7 +12,7 @@ COPY webserver/frontend ./frontend
 RUN make build
 
 # Stage 2: Build Rust binaries
-FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/rust:1.92 AS rust-builder
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/rust:1.92-bookworm AS rust-builder
 
 WORKDIR /usr/src/app
 
@@ -20,9 +20,6 @@ COPY . .
 
 # Build all binaries using the Makefile
 RUN make build
-
-# Stage 3: Final runtime image
-
 
 # Stage 3: Final runtime image
 FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/debian:bookworm-slim
