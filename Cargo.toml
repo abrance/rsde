@@ -42,3 +42,6 @@ reqwest = { version = "0.12", default-features = false, features = [
 rdkafka = { version = "0.36", features = ["tokio"] }
 futures = "0.3"
 clap = { version = "4.5", features = ["derive"] }
+axum-prometheus = "0.10.0"
+prometheus = "0.14.0"
+lazy_static = "1.4"

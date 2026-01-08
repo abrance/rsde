@@ -9,6 +9,7 @@ core = { path = "../common/core" }
 config = { path = "../common/config" }
 pic_recog = { path = "../pic_recog" }
 anybox = { path = "../anybox" }
+rc = { path = "../rc" }
 axum = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
@@ -21,3 +22,6 @@ tracing-subscriber = { workspace = true }
 toml = { workspace = true }
 rand = { workspace = true }
 chrono = { workspace = true }
+axum-prometheus = { workspace = true }
+prometheus = { workspace = true }
+lazy_static = { workspace = true }

@@ -2,8 +2,9 @@ mod anybox;
 mod image;
 mod ocr;
 
-use axum::{Router, http::StatusCode};
+use axum::Router;
 use config::{ConfigLoader, GlobalConfig};
+use prometheus::{Encoder, TextEncoder};
 use std::{
     net::{IpAddr, SocketAddr},
     panic,
@@ -17,6 +18,15 @@ use tower_http::{
 };
 use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+/// Metrics handler - 导出所有 prometheus 指标
+async fn metrics_handler() -> String {
+    let encoder = TextEncoder::new();
+    let metric_families = prometheus::gather();
+    let mut buffer = vec![];
+    encoder.encode(&metric_families, &mut buffer).unwrap();
+    String::from_utf8(buffer).unwrap()
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -49,6 +59,17 @@ async fn main() -> anyhow::Result<()> {
     // 启动图片清理任务
     image::start_cleanup_task(image_hosting_config.clone());
 
+    // 注册自定义指标到 default registry
+    if let Err(e) = image::register_metrics() {
+        error!("注册自定义指标失败: {e}");
+    }
+
+    // 配置 Prometheus 指标采集（使用 default registry）
+    let prometheus_layer = axum_prometheus::PrometheusMetricLayerBuilder::new()
+        .with_default_metrics()
+        .build_pair();
+    let _metric_handle = prometheus_layer.1.clone();
+
     // 配置 CORS
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -62,11 +83,13 @@ async fn main() -> anyhow::Result<()> {
     let has_frontend = Path::new(&frontend_dir).exists();
 
     let mut app = Router::new()
+        .route("/metrics", axum::routing::get(metrics_handler))
         .nest(
             "/api/ocr",
             ocr::create_routes(remote_ocr_config, image_hosting_config.storage_dir.clone()),
         )
-        .nest("/api/image", image::create_routes(image_hosting_config));
+        .nest("/api/image", image::create_routes(image_hosting_config))
+        .nest("/api/rc", rc::create_routes());
 
     // 添加 Anybox 路由（如果配置存在）
     if let Some(anybox_cfg) = anybox_config {
@@ -92,6 +115,7 @@ async fn main() -> anyhow::Result<()> {
     app = app.layer(
         ServiceBuilder::new()
             .layer(TraceLayer::new_for_http())
+            .layer(prometheus_layer.0)
             .layer(cors),
     );
 

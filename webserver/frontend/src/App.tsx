@@ -13,10 +13,10 @@ function App() {
             <Layout>
                 <Routes>
                     <Route path="/" element={<HomePage />} />
-                    <Route path="/rsync" element={<RsyncPage />} />
                     <Route path="/rc" element={<RcPage />} />
                     <Route path="/ocr" element={<OcrPage />} />
                     <Route path="/anybox" element={<AnyboxPage />} />
+                    <Route path="/rsync" element={<RsyncPage />} />
                 </Routes>
             </Layout>
         </Router>

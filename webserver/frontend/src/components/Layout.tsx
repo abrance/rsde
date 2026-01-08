@@ -28,12 +28,6 @@ export default function Layout({ children }: LayoutProps) {
                                 首页
                             </Link>
                             <Link
-                                to="/rsync"
-                                className={`nav-link ${isActive('/rsync') ? 'active' : ''}`}
-                            >
-                                Rsync
-                            </Link>
-                            <Link
                                 to="/rc"
                                 className={`nav-link ${isActive('/rc') ? 'active' : ''}`}
                             >
@@ -50,6 +44,12 @@ export default function Layout({ children }: LayoutProps) {
                                 className={`nav-link ${isActive('/anybox') ? 'active' : ''}`}
                             >
                                 Anybox
+                            </Link>
+                            <Link
+                                to="/rsync"
+                                className={`nav-link ${isActive('/rsync') ? 'active' : ''}`}
+                            >
+                                Rsync (todo)
                             </Link>
                         </nav>
                     </div>
