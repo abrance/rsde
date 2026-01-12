@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 use tracing::{error, info};
 
 /// Anybox 服务状态
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AnyboxState {
     manager: Arc<Mutex<TextBoxManager>>,
 }

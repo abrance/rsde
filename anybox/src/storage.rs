@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use redis::{AsyncCommands, aio::ConnectionManager};
-use serde::{Serialize, de::DeserializeOwned};
+use serde::Serialize;
+use std::fmt::Debug;
 use tracing::{debug, error, info};
 
 use crate::models::{PaginatedResult, PaginationParams, TextBox};
@@ -38,6 +39,7 @@ impl RedisConfig {
 }
 
 /// TextBox 管理器
+#[derive(Clone)]
 pub struct TextBoxManager {
     /// Redis 连接管理器
     conn: ConnectionManager,
@@ -290,6 +292,14 @@ impl TextBoxManager {
             .context("获取总数失败")?;
 
         Ok(TextBoxStats { total })
+    }
+}
+
+impl Debug for TextBoxManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TextBoxManager")
+            .field("key_prefix", &self.key_prefix)
+            .finish()
     }
 }
 
