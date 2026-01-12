@@ -1,0 +1,52 @@
+# Example values for file-transfer-go
+
+namespace: xy
+
+replicaCount: 2
+
+image:
+  repository: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/matrixseven/file-transfer-go
+  pullPolicy: Always
+  tag: "latest"
+
+service:
+  type: NodePort
+  port: 8080
+  targetPort: 8080
+
+ingress:
+  enabled: true
+  className: "traefik"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    traefik.ingress.kubernetes.io/redirect-entry-point: "https"
+  hosts:
+    - host: filetransfer.xiaoyxq.top
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: filetransfer-tls
+      hosts:
+        - filetransfer.xiaoyxq.top
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 200m
+    memory: 256Mi
+
+env:
+  - name: LOG_LEVEL
+    value: "INFO"
+  - name: PORT
+    value: "8080"
+
+persistence:
+  enabled: true
+  storageClass: "local-path"
+  accessMode: ReadWriteOnce
+  size: 20Gi
+  mountPath: /data

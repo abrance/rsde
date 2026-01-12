@@ -1,0 +1,11 @@
+apiVersion: v2
+name: file-transfer-go
+description: A Helm chart for deploying file-transfer-go service
+type: application
+version: 0.1.0
+appVersion: "latest"
+keywords:
+  - file-transfer
+  - go
+maintainers:
+  - name: RSDE Team
