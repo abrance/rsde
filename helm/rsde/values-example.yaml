@@ -22,6 +22,8 @@ service:
   port: 3000
   # 如果使用 NodePort
   # nodePort: 30000
+  annotations: {}
+
 
 # 资源配置 - 根据实际负载调整
 resources:
@@ -126,7 +128,10 @@ env:
 #                 - worker
 
 # Pod 注解
-# podAnnotations:
-#   prometheus.io/scrape: "true"
-#   prometheus.io/port: "3000"
-#   prometheus.io/path: "/metrics"
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "3000"
+  prometheus.io/path: "/metrics"
+
+service:
+  annotations: {}
