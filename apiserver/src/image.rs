@@ -6,8 +6,6 @@ use axum::{
     routing::post,
 };
 use config::image_host::ImageHostingConfig;
-use lazy_static::lazy_static;
-use prometheus::{Counter, Histogram, HistogramOpts, IntCounter};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,57 +13,7 @@ use std::time::{Duration, SystemTime};
 use tokio::io::AsyncWriteExt;
 use tracing::{error, info, warn};
 
-lazy_static! {
-    /// 成功上传的图片文件数量
-    static ref IMAGE_UPLOAD_COUNT: IntCounter = IntCounter::new(
-        "image_upload_total",
-        "Total number of successfully uploaded images"
-    )
-    .unwrap();
-
-    /// 上传图片文件大小分布（字节）
-    static ref IMAGE_UPLOAD_SIZE: Histogram = Histogram::with_opts(
-        HistogramOpts::new(
-            "image_upload_size_bytes",
-            "Size distribution of uploaded images in bytes"
-        )
-        .buckets(vec![
-            1024.0,        // 1KB
-            10240.0,       // 10KB
-            102400.0,      // 100KB
-            512000.0,      // 500KB
-            1048576.0,     // 1MB
-            5242880.0,     // 5MB
-            10485760.0,    // 10MB
-            52428800.0,    // 50MB
-        ])
-    )
-    .unwrap();
-
-    /// 图片清理统计：删除的文件数量
-    static ref IMAGE_CLEANUP_COUNT: IntCounter = IntCounter::new(
-        "image_cleanup_deleted_total",
-        "Total number of deleted images by cleanup task"
-    )
-    .unwrap();
-
-    /// 图片清理统计：释放的存储空间（字节）
-    static ref IMAGE_CLEANUP_SIZE: Counter = Counter::new(
-        "image_cleanup_freed_bytes",
-        "Total bytes freed by cleanup task"
-    )
-    .unwrap();
-}
-
-/// 注册自定义指标到 prometheus default registry
-pub fn register_metrics() -> Result<(), prometheus::Error> {
-    let registry = prometheus::default_registry();
-    registry.register(Box::new(IMAGE_UPLOAD_COUNT.clone()))?;
-    registry.register(Box::new(IMAGE_UPLOAD_SIZE.clone()))?;
-    registry.register(Box::new(IMAGE_CLEANUP_COUNT.clone()))?;
-    registry.register(Box::new(IMAGE_CLEANUP_SIZE.clone()))?;
-    Ok(())
-}
+use util::metrics::ImageMetrics;
 
 #[derive(Clone)]
 pub struct ImageState {
@@ -194,9 +142,8 @@ pub async fn handle_upload(
         let file_size = data.len() as u64;
         info!("文件上传成功: {new_filename}, size: {file_size} bytes");
 
-        // 记录 prometheus 指标
-        IMAGE_UPLOAD_COUNT.inc();
-        IMAGE_UPLOAD_SIZE.observe(file_size as f64);
+        // 记录 metrics 指标
+        ImageMetrics::record_upload_success(file_size);
 
         // 返回相对路径
         return Ok(Json(UploadResponse {
@@ -279,8 +226,7 @@ async fn cleanup_expired_files(storage_dir: &str, expire_secs: u64) {
                 );
 
                 // 记录清理指标
-                IMAGE_CLEANUP_COUNT.inc_by(deleted_files);
-                IMAGE_CLEANUP_SIZE.inc_by(deleted_size as f64);
+                ImageMetrics::record_cleanup(deleted_files, deleted_size);
             } else {
                 info!("清理完成: 扫描 {total_files} 个文件, 无过期文件");
             }

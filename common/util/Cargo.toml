@@ -16,6 +16,14 @@ tokio = { workspace = true, features = ["rt", "macros"] }
 rdkafka.workspace = true
 futures.workspace = true
 chrono.workspace = true
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+metrics-util = { workspace = true }
+axum = { workspace = true, optional = true }
+
+[features]
+default = []
+metrics = ["dep:axum"]
 
 [[test]]
 # Kafka client 集成测试

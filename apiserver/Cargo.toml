@@ -4,7 +4,7 @@ edition.workspace = true
 version.workspace = true
 
 [dependencies]
-util = { path = "../common/util" }
+util = { path = "../common/util", features = ["metrics"] }
 core = { path = "../common/core" }
 config = { path = "../common/config" }
 pic_recog = { path = "../pic_recog" }
@@ -22,6 +22,6 @@ tracing-subscriber = { workspace = true }
 toml = { workspace = true }
 rand = { workspace = true }
 chrono = { workspace = true }
-axum-prometheus = { workspace = true }
+metrics = { workspace = true }
 prometheus = { workspace = true }
 lazy_static = { workspace = true }

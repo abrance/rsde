@@ -4,7 +4,6 @@ mod ocr;
 
 use axum::Router;
 use config::{ConfigLoader, GlobalConfig};
-use prometheus::{Encoder, TextEncoder};
 use std::{
     net::{IpAddr, SocketAddr},
     panic,
@@ -19,13 +18,19 @@ use tower_http::{
 use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-/// Metrics handler - 导出所有 prometheus 指标
-async fn metrics_handler() -> String {
-    let encoder = TextEncoder::new();
-    let metric_families = prometheus::gather();
-    let mut buffer = vec![];
-    encoder.encode(&metric_families, &mut buffer).unwrap();
-    String::from_utf8(buffer).unwrap()
+use axum::http::header;
+use axum::response::{IntoResponse, Response};
+use util::metrics::{increment_counter, init_metrics, track_http_metrics};
+
+async fn metrics_handler() -> Response {
+    // 执行维护操作以确保指标被正确收集
+    init_metrics().handle().run_upkeep();
+    let metrics_text = init_metrics().handle().render();
+    (
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        metrics_text,
+    )
+        .into_response()
 }
 
 #[tokio::main]
@@ -40,6 +45,12 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     info!("启动 API Server...");
+
+    // 初始化指标系统
+    let _metrics_registry = init_metrics();
+
+    // 添加测试指标
+    increment_counter("server_start_total");
 
     // 加载配置文件
     let config_path =
@@ -58,17 +69,6 @@ async fn main() -> anyhow::Result<()> {
 
     // 启动图片清理任务
     image::start_cleanup_task(image_hosting_config.clone());
-
-    // 注册自定义指标到 default registry
-    if let Err(e) = image::register_metrics() {
-        error!("注册自定义指标失败: {e}");
-    }
-
-    // 配置 Prometheus 指标采集（使用 default registry）
-    let prometheus_layer = axum_prometheus::PrometheusMetricLayerBuilder::new()
-        .with_default_metrics()
-        .build_pair();
-    let _metric_handle = prometheus_layer.1.clone();
 
     // 配置 CORS
     let cors = CorsLayer::new()
@@ -111,11 +111,10 @@ async fn main() -> anyhow::Result<()> {
         info!("前端服务已启用");
     }
 
-    // 添加中间件
     app = app.layer(
         ServiceBuilder::new()
             .layer(TraceLayer::new_for_http())
-            .layer(prometheus_layer.0)
+            .layer(axum::middleware::from_fn(track_http_metrics))
             .layer(cors),
     );
 
