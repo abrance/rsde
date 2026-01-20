@@ -2,6 +2,7 @@ use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use util::client::kafka::{KafkaClientConfig, KafkaProducer, SaslConfig};
+use util::client::redis::{RedisClient, RedisClientConfig, RedisPingResult};
 
 #[derive(Parser)]
 #[command(name = "rc")]
@@ -15,6 +16,8 @@ struct Cli {
 enum Commands {
     /// Kafka related operations
     Kafka(KafkaArgs),
+    /// Redis related operations
+    Redis(RedisArgs),
 }
 
 #[derive(Args)]
@@ -72,6 +75,222 @@ struct PingArgs {
     format: String,
 }
 
+#[derive(Args)]
+struct RedisArgs {
+    #[command(subcommand)]
+    command: RedisCommands,
+}
+
+#[derive(Subcommand)]
+enum RedisCommands {
+    /// Ping Redis server to check connectivity
+    Ping(RedisPingArgs),
+    /// Get value by key
+    Get(RedisGetArgs),
+    /// Set key-value pair
+    Set(RedisSetArgs),
+    /// Delete key
+    Del(RedisDelArgs),
+    /// Get server info
+    Info(RedisInfoArgs),
+    /// List keys matching pattern
+    Keys(RedisKeysArgs),
+}
+
+#[derive(Args)]
+struct RedisPingArgs {
+    /// Redis server address (host:port or redis://host:port)
+    #[arg(short = 'H', long, required = true)]
+    host: String,
+
+    /// Password for authentication
+    #[arg(short, long)]
+    password: Option<String>,
+
+    /// Username for ACL authentication (Redis 6.0+)
+    #[arg(short, long)]
+    username: Option<String>,
+
+    /// Database index (default: 0)
+    #[arg(short, long, default_value = "0")]
+    db: i64,
+
+    /// Connection timeout in seconds
+    #[arg(long, default_value = "10")]
+    timeout: u64,
+
+    /// Enable TLS
+    #[arg(long)]
+    tls: bool,
+
+    /// Output format (text or json)
+    #[arg(long, default_value = "text")]
+    format: String,
+}
+
+#[derive(Args)]
+struct RedisGetArgs {
+    /// Redis server address (host:port or redis://host:port)
+    #[arg(short = 'H', long, required = true)]
+    host: String,
+
+    /// Key to get
+    #[arg(short, long, required = true)]
+    key: String,
+
+    /// Password for authentication
+    #[arg(short, long)]
+    password: Option<String>,
+
+    /// Username for ACL authentication (Redis 6.0+)
+    #[arg(short, long)]
+    username: Option<String>,
+
+    /// Database index (default: 0)
+    #[arg(short, long, default_value = "0")]
+    db: i64,
+
+    /// Enable TLS
+    #[arg(long)]
+    tls: bool,
+
+    /// Output format (text or json)
+    #[arg(long, default_value = "text")]
+    format: String,
+}
+
+#[derive(Args)]
+struct RedisSetArgs {
+    /// Redis server address (host:port or redis://host:port)
+    #[arg(short = 'H', long, required = true)]
+    host: String,
+
+    /// Key to set
+    #[arg(short, long, required = true)]
+    key: String,
+
+    /// Value to set
+    #[arg(short, long, required = true)]
+    value: String,
+
+    /// Password for authentication
+    #[arg(short, long)]
+    password: Option<String>,
+
+    /// Username for ACL authentication (Redis 6.0+)
+    #[arg(short = 'U', long)]
+    username: Option<String>,
+
+    /// Database index (default: 0)
+    #[arg(short, long, default_value = "0")]
+    db: i64,
+
+    /// TTL in seconds (optional)
+    #[arg(short, long)]
+    ttl: Option<u64>,
+
+    /// Enable TLS
+    #[arg(long)]
+    tls: bool,
+
+    /// Output format (text or json)
+    #[arg(long, default_value = "text")]
+    format: String,
+}
+
+#[derive(Args)]
+struct RedisDelArgs {
+    /// Redis server address (host:port or redis://host:port)
+    #[arg(short = 'H', long, required = true)]
+    host: String,
+
+    /// Key to delete
+    #[arg(short, long, required = true)]
+    key: String,
+
+    /// Password for authentication
+    #[arg(short, long)]
+    password: Option<String>,
+
+    /// Username for ACL authentication (Redis 6.0+)
+    #[arg(short, long)]
+    username: Option<String>,
+
+    /// Database index (default: 0)
+    #[arg(short, long, default_value = "0")]
+    db: i64,
+
+    /// Enable TLS
+    #[arg(long)]
+    tls: bool,
+
+    /// Output format (text or json)
+    #[arg(long, default_value = "text")]
+    format: String,
+}
+
+#[derive(Args)]
+struct RedisInfoArgs {
+    /// Redis server address (host:port or redis://host:port)
+    #[arg(short = 'H', long, required = true)]
+    host: String,
+
+    /// Password for authentication
+    #[arg(short, long)]
+    password: Option<String>,
+
+    /// Username for ACL authentication (Redis 6.0+)
+    #[arg(short, long)]
+    username: Option<String>,
+
+    /// Database index (default: 0)
+    #[arg(short, long, default_value = "0")]
+    db: i64,
+
+    /// Info section (server, clients, memory, stats, replication, cpu, keyspace, all)
+    #[arg(short, long)]
+    section: Option<String>,
+
+    /// Enable TLS
+    #[arg(long)]
+    tls: bool,
+
+    /// Output format (text or json)
+    #[arg(long, default_value = "text")]
+    format: String,
+}
+
+#[derive(Args)]
+struct RedisKeysArgs {
+    /// Redis server address (host:port or redis://host:port)
+    #[arg(short = 'H', long, required = true)]
+    host: String,
+
+    /// Pattern to match (default: *)
+    #[arg(short = 'P', long, default_value = "*")]
+    pattern: String,
+
+    /// Password for authentication
+    #[arg(short, long)]
+    password: Option<String>,
+
+    /// Username for ACL authentication (Redis 6.0+)
+    #[arg(short, long)]
+    username: Option<String>,
+
+    /// Database index (default: 0)
+    #[arg(short, long, default_value = "0")]
+    db: i64,
+
+    /// Enable TLS
+    #[arg(long)]
+    tls: bool,
+
+    /// Output format (text or json)
+    #[arg(long, default_value = "text")]
+    format: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct PingResult {
     success: bool,
@@ -104,6 +323,7 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Kafka(kafka_args) => handle_kafka_command(kafka_args).await?,
+        Commands::Redis(redis_args) => handle_redis_command(redis_args).await?,
     }
 
     Ok(())
@@ -277,7 +497,6 @@ fn parse_metadata(metadata: &str, result: &mut PingResult) {
             result.topic_count = count_str.parse().ok();
         }
     }
-    // 查找 partition 信息
     for line in metadata.lines() {
         if line.contains("partitions") {
             if let Some(parts) = line.split(':').nth(1) {
@@ -287,4 +506,331 @@ fn parse_metadata(metadata: &str, result: &mut PingResult) {
             }
         }
     }
+}
+
+async fn handle_redis_command(args: RedisArgs) -> anyhow::Result<()> {
+    match args.command {
+        RedisCommands::Ping(ping_args) => handle_redis_ping(ping_args).await?,
+        RedisCommands::Get(get_args) => handle_redis_get(get_args).await?,
+        RedisCommands::Set(set_args) => handle_redis_set(set_args).await?,
+        RedisCommands::Del(del_args) => handle_redis_del(del_args).await?,
+        RedisCommands::Info(info_args) => handle_redis_info(info_args).await?,
+        RedisCommands::Keys(keys_args) => handle_redis_keys(keys_args).await?,
+    }
+    Ok(())
+}
+
+fn build_redis_config(
+    host: &str,
+    password: Option<&str>,
+    username: Option<&str>,
+    db: i64,
+    tls: bool,
+) -> RedisClientConfig {
+    let mut config = RedisClientConfig::new(host).with_db(db).with_tls(tls);
+    if let Some(pass) = password {
+        config = config.with_password(pass);
+    }
+    if let Some(user) = username {
+        config = config.with_username(user);
+    }
+    config
+}
+
+async fn handle_redis_ping(args: RedisPingArgs) -> anyhow::Result<()> {
+    let is_json = args.format.to_lowercase() == "json";
+    let config = build_redis_config(
+        &args.host,
+        args.password.as_deref(),
+        args.username.as_deref(),
+        args.db,
+        args.tls,
+    );
+
+    let mut result = RedisPingResult {
+        success: false,
+        url: args.host.clone(),
+        db: Some(args.db),
+        version: None,
+        dbsize: None,
+        error: None,
+    };
+
+    if !is_json {
+        println!("🔌 Connecting to Redis...");
+        println!("   Host: {}", args.host);
+        println!("   Database: {}", args.db);
+        if args.tls {
+            println!("   TLS: Enabled");
+        }
+    }
+
+    let mut client = match RedisClient::new(&config).await {
+        Ok(c) => c,
+        Err(e) => {
+            result.error = Some(e.clone());
+            if is_json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("❌ Connection failed: {}", e);
+            }
+            return Err(anyhow::anyhow!(e));
+        }
+    };
+
+    if !is_json {
+        println!("\n⏳ Pinging Redis...");
+    }
+
+    match client.ping().await {
+        Ok(pong) => {
+            result.success = true;
+            if !is_json {
+                println!("✅ Ping successful! Response: {}", pong);
+            }
+        }
+        Err(e) => {
+            result.error = Some(e.clone());
+            if is_json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("❌ Ping failed: {}", e);
+            }
+            return Err(anyhow::anyhow!(e));
+        }
+    }
+
+    if let Ok(version) = client.version().await {
+        result.version = Some(version.clone());
+        if !is_json {
+            println!("   Version: {}", version);
+        }
+    }
+
+    if let Ok(dbsize) = client.dbsize().await {
+        result.dbsize = Some(dbsize);
+        if !is_json {
+            println!("   Keys in DB: {}", dbsize);
+        }
+    }
+
+    if is_json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    }
+
+    Ok(())
+}
+
+async fn handle_redis_get(args: RedisGetArgs) -> anyhow::Result<()> {
+    let is_json = args.format.to_lowercase() == "json";
+    let config = build_redis_config(
+        &args.host,
+        args.password.as_deref(),
+        args.username.as_deref(),
+        args.db,
+        args.tls,
+    );
+
+    let mut client = RedisClient::new(&config)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    match client.get(&args.key).await {
+        Ok(Some(value)) => {
+            if is_json {
+                println!(
+                    "{}",
+                    serde_json::json!({"key": args.key, "value": value, "exists": true})
+                );
+            } else {
+                println!("{}", value);
+            }
+        }
+        Ok(None) => {
+            if is_json {
+                println!(
+                    "{}",
+                    serde_json::json!({"key": args.key, "value": null, "exists": false})
+                );
+            } else {
+                println!("(nil)");
+            }
+        }
+        Err(e) => {
+            if is_json {
+                println!("{}", serde_json::json!({"error": e}));
+            } else {
+                println!("❌ Error: {}", e);
+            }
+            return Err(anyhow::anyhow!(e));
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_redis_set(args: RedisSetArgs) -> anyhow::Result<()> {
+    let is_json = args.format.to_lowercase() == "json";
+    let config = build_redis_config(
+        &args.host,
+        args.password.as_deref(),
+        args.username.as_deref(),
+        args.db,
+        args.tls,
+    );
+
+    let mut client = RedisClient::new(&config)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    let result = if let Some(ttl) = args.ttl {
+        client.set_ex(&args.key, &args.value, ttl).await
+    } else {
+        client.set(&args.key, &args.value).await
+    };
+
+    match result {
+        Ok(()) => {
+            if is_json {
+                println!(
+                    "{}",
+                    serde_json::json!({"success": true, "key": args.key, "ttl": args.ttl})
+                );
+            } else {
+                println!("OK");
+            }
+        }
+        Err(e) => {
+            if is_json {
+                println!("{}", serde_json::json!({"success": false, "error": e}));
+            } else {
+                println!("❌ Error: {}", e);
+            }
+            return Err(anyhow::anyhow!(e));
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_redis_del(args: RedisDelArgs) -> anyhow::Result<()> {
+    let is_json = args.format.to_lowercase() == "json";
+    let config = build_redis_config(
+        &args.host,
+        args.password.as_deref(),
+        args.username.as_deref(),
+        args.db,
+        args.tls,
+    );
+
+    let mut client = RedisClient::new(&config)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    match client.del(&args.key).await {
+        Ok(count) => {
+            if is_json {
+                println!("{}", serde_json::json!({"deleted": count, "key": args.key}));
+            } else {
+                println!("(integer) {}", count);
+            }
+        }
+        Err(e) => {
+            if is_json {
+                println!("{}", serde_json::json!({"error": e}));
+            } else {
+                println!("❌ Error: {}", e);
+            }
+            return Err(anyhow::anyhow!(e));
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_redis_info(args: RedisInfoArgs) -> anyhow::Result<()> {
+    let is_json = args.format.to_lowercase() == "json";
+    let config = build_redis_config(
+        &args.host,
+        args.password.as_deref(),
+        args.username.as_deref(),
+        args.db,
+        args.tls,
+    );
+
+    let mut client = RedisClient::new(&config)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    match client.info(args.section.as_deref()).await {
+        Ok(info) => {
+            if is_json {
+                let info_map: std::collections::HashMap<String, String> = info
+                    .lines()
+                    .filter(|line| !line.starts_with('#') && line.contains(':'))
+                    .filter_map(|line| {
+                        let mut parts = line.splitn(2, ':');
+                        Some((parts.next()?.to_string(), parts.next()?.to_string()))
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&info_map)?);
+            } else {
+                println!("{}", info);
+            }
+        }
+        Err(e) => {
+            if is_json {
+                println!("{}", serde_json::json!({"error": e}));
+            } else {
+                println!("❌ Error: {}", e);
+            }
+            return Err(anyhow::anyhow!(e));
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_redis_keys(args: RedisKeysArgs) -> anyhow::Result<()> {
+    let is_json = args.format.to_lowercase() == "json";
+    let config = build_redis_config(
+        &args.host,
+        args.password.as_deref(),
+        args.username.as_deref(),
+        args.db,
+        args.tls,
+    );
+
+    let mut client = RedisClient::new(&config)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    match client.keys(&args.pattern).await {
+        Ok(keys) => {
+            if is_json {
+                println!(
+                    "{}",
+                    serde_json::json!({"pattern": args.pattern, "count": keys.len(), "keys": keys})
+                );
+            } else {
+                if keys.is_empty() {
+                    println!("(empty list)");
+                } else {
+                    for (i, key) in keys.iter().enumerate() {
+                        println!("{}) \"{}\"", i + 1, key);
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            if is_json {
+                println!("{}", serde_json::json!({"error": e}));
+            } else {
+                println!("❌ Error: {}", e);
+            }
+            return Err(anyhow::anyhow!(e));
+        }
+    }
+
+    Ok(())
 }
