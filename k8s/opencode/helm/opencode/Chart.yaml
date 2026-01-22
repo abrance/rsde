@@ -1,0 +1,12 @@
+apiVersion: v2
+name: opencode
+description: A Helm chart for deploying opencode AI coding assistant service
+type: application
+version: 0.1.0
+appVersion: "latest"
+keywords:
+  - opencode
+  - ai
+  - coding-assistant
+maintainers:
+  - name: RSDE Team
