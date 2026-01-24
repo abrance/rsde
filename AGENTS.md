@@ -1,6 +1,18 @@
 # AGENTS.md - AI Coding Agent Guidelines for rsde
 
-> rsde(xy) is a Rust-based Kubernetes toolset providing data sync (rsync), remote config (rc), OCR (pic_recog), and unified API gateway (apiserver).
+> rsde(xy) is a Rust-based Kubernetes toolset providing data sync (rsync), remote config (rc), OCR (pic_recog), unified API gateway (apiserver), and text sharing (anybox).
+
+## Project Overview
+
+This is a **monorepo Rust workspace** with 6 main packages:
+- `apiserver` - Axum-based API gateway with integrated React frontend
+- `rsync` - Data synchronization tool with rule engine (`lib/rule`)
+- `rc` - Remote configuration CLI tool for middleware testing
+- `pic_recog` - OCR recognition library with multiple engine support
+- `anybox` - Text sharing service (Pastebin-like)
+- `common/*` - Shared libraries (config, core, util)
+
+**Frontend**: React + TypeScript + Vite, built separately and served statically by apiserver.
 
 ## Build, Lint, and Test Commands
 
@@ -15,6 +27,7 @@ cargo build -p rsync
 cargo build -p apiserver
 cargo build -p rc
 cargo build -p pic_recog
+cargo build -p anybox
 
 # Run all tests
 cargo test --workspace
@@ -44,14 +57,14 @@ cargo clippy --workspace --all-features
 cd webserver/frontend
 npm install
 npm run build      # Production build (outputs to dist/)
-npm run dev        # Development server (port 5173)
+npm run dev        # Development server (port 3000)
 npm run lint       # ESLint
 ```
 
 ### Makefile Shortcuts (Root)
 
 ```bash
-make build         # Build all binaries (rsync, rc, apiserver)
+make build         # Build all binaries (rsync, rc, apiserver, pic_recog, anybox)
 make test          # Run all tests
 make fmt           # Format code
 make fmt-check     # Check formatting
@@ -110,11 +123,12 @@ helm rollback rsde-apiserver -n xy
 
 - **Edition**: 2024 (workspace-level)
 - **Async Runtime**: tokio (full features)
-- **Serialization**: serde + serde_json
+- **Serialization**: serde + serde_json + typetag (for polymorphic serialization)
 - **Error Handling**: anyhow (applications), custom enum errors (libraries)
 - **HTTP Framework**: axum 0.7
 - **Config Format**: TOML (via `toml` crate)
 - **Logging**: tracing + tracing-subscriber
+- **CLI**: clap for command-line interfaces
 
 ### Import Organization
 
@@ -175,7 +189,7 @@ impl From<std::io::Error> for RsyncError {
 pub type Result<T> = std::result::Result<T, RsyncError>;
 ```
 
-**For applications (like apiserver)**, use `anyhow::Result`.
+**For applications (like apiserver, rc)**, use `anyhow::Result`.
 
 ### Async Trait Pattern
 
@@ -249,18 +263,18 @@ mod tests {
 
 ```
 rsde/
-├── apiserver/         # API gateway (axum-based web server)
+├── apiserver/         # API gateway (axum-based web server with integrated React frontend)
 ├── rsync/             # Data sync tool
 │   └── lib/rule/      # Core Source→Transform→Sink abstractions
-├── rc/                # Remote config management
+├── rc/                # Remote config management CLI tool
 ├── pic_recog/         # OCR recognition module
 ├── anybox/            # Text sharing service (Pastebin-like)
 ├── common/
 │   ├── config/        # Unified configuration definitions
 │   ├── core/          # Core functionality
-│   └── util/          # Utilities (logging, metrics, HTTP client)
+│   └── util/          # Utilities (logging, metrics, HTTP client, Kafka/Redis clients)
 ├── webserver/
-│   └── frontend/      # React + TypeScript + Vite frontend
+│   └── frontend/      # React + TypeScript + Vite frontend (built into dist/ and served by apiserver)
 ├── helm/rsde/         # Kubernetes Helm chart
 └── manifest/          # Configuration files
 ```
@@ -294,6 +308,24 @@ pub fn create_routes(config: MyConfig) -> Router {
 }
 ```
 
+### CLI Tool Architecture (rc)
+
+Uses clap for sophisticated CLI parsing with subcommands and nested arguments:
+
+```rust
+#[derive(Parser)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Kafka(KafkaArgs),
+    Redis(RedisArgs),
+}
+```
+
 ## CI/CD Pipeline
 
 The GitHub Actions workflow (`.github/workflows/rsync-ci.yml`) runs:
@@ -308,6 +340,7 @@ The GitHub Actions workflow (`.github/workflows/rsync-ci.yml`) runs:
 2. **Blocking in async**: Use `tokio::task::spawn_blocking` for sync operations
 3. **Config loading**: Check `API_CONFIG` env var, defaults to `apiserver/config.toml`
 4. **Test file placement**: Use `*_test.rs` suffix, not `test_*.rs`
+5. **Kafka/Redis connectivity**: Ensure proper SASL configuration for authenticated clusters
 
 ## Environment Variables
 
@@ -316,3 +349,29 @@ The GitHub Actions workflow (`.github/workflows/rsync-ci.yml`) runs:
 | `API_CONFIG` | Config file path | `apiserver/config.toml` |
 | `RSYNC_CONFIG_DIR` | Rsync config directory | `.` |
 | `RUST_LOG` | Log level filter | `apiserver=debug,tower_http=debug` |
+
+## Component-Specific Notes
+
+### apiserver
+- Serves both API routes (`/api/*`) and static frontend files
+- Requires frontend to be built before running (`webserver/frontend/dist` must exist)
+- Integrates metrics endpoint at `/metrics`
+
+### rsync
+- Uses file watching to dynamically load rule configurations
+- Rule engine supports Source→Transform→Sink pipeline architecture
+- Health check available at `/health`
+
+### rc
+- Comprehensive CLI tool for testing middleware connectivity
+- Supports Kafka (with SASL) and Redis connectivity testing
+- JSON output format available for programmatic use
+
+### pic_recog
+- Currently implements Remote OCR engine
+- Validates image size/format before sending to remote service
+- Supports both text-only and coordinate-aware recognition
+
+### anybox
+- Simple text sharing service with Redis backend
+- Integrated into apiserver when configured
