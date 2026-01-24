@@ -16,13 +16,35 @@ impl MetricsRegistry {
         static INSTANCE: OnceLock<MetricsRegistry> = OnceLock::new();
         INSTANCE.get_or_init(|| {
             let builder = PrometheusBuilder::new()
-                // 配置 HTTP 请求持续时间的桶
                 .set_buckets_for_metric(
                     Matcher::Full("http_requests_duration_seconds".to_string()),
                     &[0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0],
                 )
                 .unwrap()
-                // 配置业务指标的桶（如文件大小）
+                .set_buckets_for_metric(
+                    Matcher::Full("http_request_size_bytes".to_string()),
+                    &[
+                        1024.0,
+                        10240.0,
+                        102400.0,
+                        1048576.0,
+                        10485760.0,
+                        104857600.0,
+                    ],
+                )
+                .unwrap()
+                .set_buckets_for_metric(
+                    Matcher::Full("http_response_size_bytes".to_string()),
+                    &[
+                        1024.0,
+                        10240.0,
+                        102400.0,
+                        1048576.0,
+                        10485760.0,
+                        104857600.0,
+                    ],
+                )
+                .unwrap()
                 .set_buckets_for_metric(
                     Matcher::Full("image_upload_size_bytes".to_string()),
                     &[
