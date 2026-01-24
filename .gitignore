@@ -244,3 +244,4 @@ webserver/frontend/.vite/
 webserver/frontend/*.local
 
 values.yaml
+.opencode/

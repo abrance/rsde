@@ -2,6 +2,7 @@ use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use util::client::kafka::{KafkaClientConfig, KafkaProducer, SaslConfig};
+use util::client::mysql::{MySqlClient, MySqlClientConfig};
 use util::client::redis::{RedisClient, RedisClientConfig, RedisPingResult};
 
 #[derive(Parser)]
@@ -17,6 +18,8 @@ enum Commands {
     /// Kafka related operations
     Kafka(KafkaArgs),
     /// Redis related operations
+    /// MySQL related operations
+    MySql(MySqlArgs),
     Redis(RedisArgs),
 }
 
@@ -291,6 +294,90 @@ struct RedisKeysArgs {
     format: String,
 }
 
+#[derive(Args)]
+struct MySqlArgs {
+    #[command(subcommand)]
+    command: MySqlCommands,
+}
+
+#[derive(Subcommand)]
+enum MySqlCommands {
+    /// Ping MySQL server to check connectivity
+    Ping(MySqlPingArgs),
+    /// Execute SQL query
+    Query(MySqlQueryArgs),
+}
+
+#[derive(Args)]
+struct MySqlPingArgs {
+    /// MySQL server address (host:port)
+    #[arg(short = 'H', long, required = true)]
+    host: String,
+
+    /// Username for authentication
+    #[arg(short, long)]
+    username: Option<String>,
+
+    /// Password for authentication
+    #[arg(short, long)]
+    password: Option<String>,
+
+    /// Database name
+    #[arg(short, long)]
+    database: Option<String>,
+
+    /// Connection timeout in seconds
+    #[arg(long, default_value = "10")]
+    timeout: u64,
+
+    /// Enable SSL/TLS
+    #[arg(long)]
+    ssl: bool,
+
+    /// Output format (text or json)
+    #[arg(long, default_value = "text")]
+    format: String,
+}
+
+#[derive(Args)]
+struct MySqlQueryArgs {
+    /// MySQL server address (host:port)
+    #[arg(short = 'H', long, required = true)]
+    host: String,
+
+    /// SQL query to execute
+    #[arg(short, long, required = true)]
+    query: String,
+
+    /// Query type (ddl or dml)
+    #[arg(long, default_value = "dml")]
+    query_type: String,
+
+    /// Username for authentication
+    #[arg(short, long)]
+    username: Option<String>,
+
+    /// Password for authentication
+    #[arg(short, long)]
+    password: Option<String>,
+
+    /// Database name
+    #[arg(short, long)]
+    database: Option<String>,
+
+    /// Connection timeout in seconds
+    #[arg(long, default_value = "10")]
+    timeout: u64,
+
+    /// Enable SSL/TLS
+    #[arg(long)]
+    ssl: bool,
+
+    /// Output format (text or json)
+    #[arg(long, default_value = "text")]
+    format: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct PingResult {
     success: bool,
@@ -317,15 +404,37 @@ struct PingResult {
     error: Option<String>,
 }
 
+/// MySQL ping result
+#[derive(Debug, Serialize, Deserialize)]
+struct MySqlPingResult {
+    success: bool,
+    host: String,
+    port: u16,
+    database: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Kafka(kafka_args) => handle_kafka_command(kafka_args).await?,
+        Commands::MySql(mysql_args) => handle_mysql_command(mysql_args).await?,
         Commands::Redis(redis_args) => handle_redis_command(redis_args).await?,
     }
 
+    Ok(())
+}
+
+async fn handle_mysql_command(args: MySqlArgs) -> anyhow::Result<()> {
+    match args.command {
+        MySqlCommands::Ping(ping_args) => handle_mysql_ping(ping_args).await?,
+        MySqlCommands::Query(query_args) => handle_mysql_query(query_args).await?,
+    }
     Ok(())
 }
 
@@ -830,6 +939,201 @@ async fn handle_redis_keys(args: RedisKeysArgs) -> anyhow::Result<()> {
             }
             return Err(anyhow::anyhow!(e));
         }
+    }
+
+    Ok(())
+}
+
+async fn handle_mysql_ping(args: MySqlPingArgs) -> anyhow::Result<()> {
+    let is_json = args.format.to_lowercase() == "json";
+    let host = args.host.clone();
+
+    if !is_json {
+        println!("🔌 Connecting to MySQL...");
+        println!("   Host: {}", args.host);
+        if let Some(db) = &args.database {
+            println!("   Database: {}", db);
+        }
+        if args.ssl {
+            println!("   TLS: Enabled");
+        }
+    }
+
+    let mut config = MySqlClientConfig::new(&args.host).with_timeout(args.timeout);
+
+    if let Some(username) = &args.username {
+        config = config.with_username(username);
+    }
+
+    if let Some(password) = &args.password {
+        config = config.with_password(password);
+    }
+
+    if let Some(database) = &args.database {
+        config = config.with_database(database);
+    }
+
+    if args.ssl {
+        config = config.with_ssl(true);
+    }
+
+    let mut result = MySqlPingResult {
+        success: false,
+        host: args.host.clone(),
+        port: 3306,
+        database: args.database.clone(),
+        version: None,
+        error: None,
+    };
+
+    // Parse port from host if present
+    if let Some(pos) = host.find(':') {
+        if let Ok(port) = host[pos + 1..].parse() {
+            result.port = port;
+        }
+    }
+
+    let mut client = match MySqlClient::new(&config).await {
+        Ok(c) => c,
+        Err(e) => {
+            result.error = Some(e.clone());
+            if is_json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("❌ Connection failed: {}", e);
+            }
+            return Err(anyhow::anyhow!(e));
+        }
+    };
+
+    if !is_json {
+        println!("\n⏳ Pinging MySQL...");
+    }
+
+    match client.ping().await {
+        Ok(()) => {
+            result.success = true;
+            if !is_json {
+                println!("✅ Ping successful!");
+            }
+        }
+        Err(e) => {
+            result.error = Some(e.clone());
+            if is_json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("❌ Ping failed: {}", e);
+            }
+            return Err(anyhow::anyhow!(e));
+        }
+    }
+
+    if let Ok(version) = client.version().await {
+        result.version = Some(version.clone());
+        if !is_json {
+            println!("   Version: {}", version);
+        }
+    }
+
+    if is_json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    }
+
+    Ok(())
+}
+
+async fn handle_mysql_query(args: MySqlQueryArgs) -> anyhow::Result<()> {
+    let is_json = args.format.to_lowercase() == "json";
+    let _host = args.host.clone();
+
+    if !is_json {
+        println!("🔌 Connecting to MySQL...");
+        println!("   Host: {}", args.host);
+        if let Some(db) = &args.database {
+            println!("   Database: {}", db);
+        }
+        if args.ssl {
+            println!("   TLS: Enabled");
+        }
+        println!("   Query: {}", args.query);
+    }
+
+    let mut config = MySqlClientConfig::new(&args.host).with_timeout(args.timeout);
+
+    if let Some(username) = &args.username {
+        config = config.with_username(username);
+    }
+
+    if let Some(password) = &args.password {
+        config = config.with_password(password);
+    }
+
+    if let Some(database) = &args.database {
+        config = config.with_database(database);
+    }
+
+    if args.ssl {
+        config = config.with_ssl(true);
+    }
+
+    let mut client = match MySqlClient::new(&config).await {
+        Ok(c) => c,
+        Err(e) => {
+            if is_json {
+                println!("{}", serde_json::json!({"error": e}));
+            } else {
+                println!("❌ Connection failed: {}", e);
+            }
+            return Err(anyhow::anyhow!(e));
+        }
+    };
+
+    if !is_json {
+        println!("\n⏳ Executing query...");
+    }
+
+    let query_type = args.query_type.to_lowercase();
+    match query_type.as_str() {
+        "ddl" => match client.execute_ddl(&args.query).await {
+            Ok(()) => {
+                if is_json {
+                    println!(
+                        "{}",
+                        serde_json::json!({"success": true, "message": "DDL executed successfully"})
+                    );
+                } else {
+                    println!("✅ DDL query executed successfully!");
+                }
+            }
+            Err(e) => {
+                if is_json {
+                    println!("{}", serde_json::json!({"error": e}));
+                } else {
+                    println!("❌ DDL query failed: {}", e);
+                }
+                return Err(anyhow::anyhow!(e));
+            }
+        },
+        "dml" | _ => match client.execute_dml(&args.query).await {
+            Ok(rows) => {
+                if is_json {
+                    println!(
+                        "{}",
+                        serde_json::json!({"success": true, "rows_affected": rows})
+                    );
+                } else {
+                    println!("✅ Query executed successfully! Rows affected: {}", rows);
+                }
+            }
+            Err(e) => {
+                if is_json {
+                    println!("{}", serde_json::json!({"error": e}));
+                } else {
+                    println!("❌ Query failed: {}", e);
+                }
+                return Err(anyhow::anyhow!(e));
+            }
+        },
     }
 
     Ok(())
