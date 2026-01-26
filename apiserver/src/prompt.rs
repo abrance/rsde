@@ -79,10 +79,19 @@ pub struct ListPromptResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct SearchParams {
-    #[serde(flatten)]
-    pub pagination: PaginationParams,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default = "default_page")]
+    pub page: u32,
+    #[serde(default = "default_page_size")]
+    pub page_size: u32,
     pub name: Option<String>,
+}
+
+fn default_page() -> u32 {
+    1
+}
+
+fn default_page_size() -> u32 {
+    20
 }
 
 async fn create_prompt(
@@ -175,15 +184,16 @@ async fn list_prompts(
 ) -> Result<Json<ListPromptResponse>, (StatusCode, Json<ListPromptResponse>)> {
     info!(
         "Listing PromptTemplates: page={}, page_size={}, name={:?}",
-        params.pagination.page, params.pagination.page_size, params.name
+        params.page, params.page_size, params.name
     );
 
     let manager = state.manager.lock().await;
+    let pagination = PaginationParams::new(params.page, params.page_size);
 
     let result = if let Some(name) = params.name {
-        manager.search_by_name(&name, params.pagination).await
+        manager.search_by_name(&name, pagination).await
     } else {
-        manager.list(params.pagination).await
+        manager.list(pagination).await
     };
 
     match result {
