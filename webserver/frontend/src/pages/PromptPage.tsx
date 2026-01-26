@@ -71,6 +71,11 @@ export default function PromptPage() {
         is_active: boolean
     } | null>(null)
 
+    // Apply template state
+    const [variableValues, setVariableValues] = useState<Record<string, string>>({})
+    const [appliedContent, setAppliedContent] = useState<string | null>(null)
+    const [copySuccess, setCopySuccess] = useState(false)
+
     useEffect(() => {
         if (activeTab === 'list') {
             fetchTemplates()
@@ -164,6 +169,7 @@ export default function PromptPage() {
         setViewedTemplate(null)
         setIsEditing(false)
         setEditForm(null)
+        resetApplyState()
 
         try {
             const response = await fetch(`/api/prompt/template/${targetId.trim()}`)
@@ -271,6 +277,45 @@ export default function PromptPage() {
 
     const getCategoryLabel = (value: string) => {
         return CATEGORIES.find(c => c.value === value)?.label || value
+    }
+
+    const extractVariables = (content: string): string[] => {
+        const regex = /\{\{(\w+)\}\}/g
+        const variables = new Set<string>()
+        let match
+        while ((match = regex.exec(content)) !== null) {
+            variables.add(match[1])
+        }
+        return Array.from(variables)
+    }
+
+    const applyTemplate = () => {
+        if (!viewedTemplate) return
+        let result = viewedTemplate.content
+        const vars = extractVariables(result)
+        for (const v of vars) {
+            const value = variableValues[v] || ''
+            result = result.replace(new RegExp(`\\{\\{${v}\\}\\}`, 'g'), value)
+        }
+        setAppliedContent(result)
+        setCopySuccess(false)
+    }
+
+    const copyToClipboard = async () => {
+        if (!appliedContent) return
+        try {
+            await navigator.clipboard.writeText(appliedContent)
+            setCopySuccess(true)
+            setTimeout(() => setCopySuccess(false), 2000)
+        } catch {
+            alert('Failed to copy')
+        }
+    }
+
+    const resetApplyState = () => {
+        setVariableValues({})
+        setAppliedContent(null)
+        setCopySuccess(false)
     }
 
     return (
@@ -690,6 +735,85 @@ export default function PromptPage() {
                                         }}>
                                             {viewedTemplate.content}
                                         </pre>
+                                    </div>
+
+                                    <div style={{ marginTop: '30px', borderTop: '1px solid var(--border-color)', paddingTop: '20px' }}>
+                                        <h4>🚀 Apply Template</h4>
+                                        {(() => {
+                                            const vars = extractVariables(viewedTemplate.content)
+                                            if (vars.length === 0) {
+                                                return (
+                                                    <div style={{ marginTop: '15px' }}>
+                                                        <p style={{ color: '#666', marginBottom: '15px' }}>No variables found in this template.</p>
+                                                        <button className="btn" onClick={applyTemplate}>
+                                                            📋 Apply Template
+                                                        </button>
+                                                    </div>
+                                                )
+                                            }
+                                            return (
+                                                <div style={{ marginTop: '15px' }}>
+                                                    <p style={{ color: '#666', marginBottom: '15px' }}>
+                                                        Found {vars.length} variable(s). Fill in the values below:
+                                                    </p>
+                                                    <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px' }}>
+                                                        <thead>
+                                                            <tr style={{ backgroundColor: 'var(--card-bg)' }}>
+                                                                <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid var(--border-color)', width: '30%' }}>Variable</th>
+                                                                <th style={{ padding: '10px', textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>Value</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {vars.map((v) => (
+                                                                <tr key={v}>
+                                                                    <td style={{ padding: '10px', borderBottom: '1px solid var(--border-color)' }}>
+                                                                        <code style={{ backgroundColor: '#f5f5f5', padding: '2px 6px', borderRadius: '4px' }}>
+                                                                            {`{{${v}}}`}
+                                                                        </code>
+                                                                    </td>
+                                                                    <td style={{ padding: '10px', borderBottom: '1px solid var(--border-color)' }}>
+                                                                        <input
+                                                                            type="text"
+                                                                            className="input"
+                                                                            placeholder={`Enter value for ${v}`}
+                                                                            value={variableValues[v] || ''}
+                                                                            onChange={(e) => setVariableValues({ ...variableValues, [v]: e.target.value })}
+                                                                            style={{ margin: 0 }}
+                                                                        />
+                                                                    </td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                    <button className="btn" onClick={applyTemplate}>
+                                                        🚀 Apply Template
+                                                    </button>
+                                                </div>
+                                            )
+                                        })()}
+
+                                        {appliedContent !== null && (
+                                            <div style={{ marginTop: '20px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                                                    <h4 style={{ margin: 0 }}>Result:</h4>
+                                                    <button
+                                                        className="btn"
+                                                        onClick={copyToClipboard}
+                                                        style={{ padding: '5px 15px', backgroundColor: copySuccess ? '#28a745' : undefined }}
+                                                    >
+                                                        {copySuccess ? '✅ Copied!' : '📋 Copy to Clipboard'}
+                                                    </button>
+                                                </div>
+                                                <pre className="result-content" style={{
+                                                    whiteSpace: 'pre-wrap',
+                                                    wordBreak: 'break-word',
+                                                    backgroundColor: '#1a1a2e',
+                                                    border: '2px solid #28a745'
+                                                }}>
+                                                    {appliedContent}
+                                                </pre>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             )}
