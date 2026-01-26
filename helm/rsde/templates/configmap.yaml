@@ -39,3 +39,18 @@ data:
     redis_url = {{ .Values.config.anybox.redis_url | quote }}
     key_prefix = {{ .Values.config.anybox.key_prefix | quote }}
     cleanup_interval_secs = {{ .Values.config.anybox.cleanup_interval_secs }}
+
+    {{- if .Values.config.prompt }}
+    [prompt]
+    table_prefix = {{ .Values.config.prompt.table_prefix | quote }}
+
+    [prompt.mysql]
+    host = {{ .Values.config.prompt.mysql.host | quote }}
+    port = {{ .Values.config.prompt.mysql.port }}
+    user = {{ .Values.config.prompt.mysql.user | quote }}
+    password = {{ .Values.config.prompt.mysql.password | quote }}
+    database = {{ .Values.config.prompt.mysql.database | quote }}
+    max_connections = {{ .Values.config.prompt.mysql.max_connections }}
+    min_connections = {{ .Values.config.prompt.mysql.min_connections }}
+    connect_timeout_secs = {{ .Values.config.prompt.mysql.connect_timeout_secs }}
+    {{- end }}

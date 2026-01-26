@@ -13,6 +13,8 @@ on:
       - 'test/**'
       - 'Dockerfile'
       - 'rc/**'
+      - 'anybox/**'
+      - 'prompt/**'
   pull_request:
     branches: [ master, main, develop ]
     paths:
@@ -25,6 +27,8 @@ on:
       - 'test/**'
       - 'Dockerfile'
       - 'rc/**'
+      - 'anybox/**'
+      - 'prompt/**'
 
 env:
   CARGO_TERM_COLOR: always

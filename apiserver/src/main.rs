@@ -1,6 +1,7 @@
 mod anybox;
 mod image;
 mod ocr;
+mod prompt;
 
 use axum::Router;
 use config::{ConfigLoader, GlobalConfig};
@@ -64,6 +65,7 @@ async fn main() -> anyhow::Result<()> {
         .image_hosting
         .expect("配置文件中缺少 [image_hosting] 部分");
     let anybox_config = global_config.anybox;
+    let prompt_config = global_config.prompt;
     let apiserver_config = global_config.apiserver.unwrap_or_default();
     info!("配置加载成功");
 
@@ -96,6 +98,13 @@ async fn main() -> anyhow::Result<()> {
         info!("启用 Anybox 服务");
         let anybox_routes = anybox::create_routes(anybox_cfg).await?;
         app = app.nest("/api/anybox", anybox_routes);
+    }
+
+    // 添加 Prompt 路由（如果配置存在）
+    if let Some(prompt_cfg) = prompt_config {
+        info!("启用 Prompt 服务");
+        let prompt_routes = prompt::create_routes(prompt_cfg).await?;
+        app = app.nest("/api/prompt", prompt_routes);
     }
 
     if !has_frontend {

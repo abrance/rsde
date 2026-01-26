@@ -9,6 +9,7 @@ core = { path = "../common/core" }
 config = { path = "../common/config" }
 pic_recog = { path = "../pic_recog" }
 anybox = { path = "../anybox" }
+prompt = { path = "../prompt" }
 rc = { path = "../rc" }
 axum = { workspace = true }
 tokio = { workspace = true }

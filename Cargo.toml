@@ -1,5 +1,5 @@
 [workspace]
-members = ["rsync", "rc", "common/*", "apiserver", "pic_recog", "anybox"]
+members = ["rsync", "rc", "common/*", "apiserver", "pic_recog", "anybox", "prompt"]
 resolver = "2"
 
 [workspace.package]
@@ -48,4 +48,4 @@ metrics = "0.24.3"
 metrics-exporter-prometheus = "0.18.1"
 metrics-util = "0.20"
 http-body-util = "0.1"
-mysql_async = { version = "0.36", default-features = false, features = ["minimal"] }
+mysql_async = { version = "0.36", default-features = false, features = ["minimal", "chrono"] }

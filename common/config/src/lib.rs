@@ -5,7 +5,9 @@
 pub mod anybox;
 pub mod apiserver;
 pub mod image_host;
+pub mod mysql;
 pub mod ocr;
+pub mod prompt;
 pub mod redis;
 pub mod rsync;
 
@@ -45,6 +47,10 @@ pub struct GlobalConfig {
     /// Anybox 配置
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anybox: Option<anybox::AnyboxConfig>,
+
+    /// Prompt 配置
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<prompt::PromptConfig>,
 }
 
 impl ConfigLoader for GlobalConfig {
