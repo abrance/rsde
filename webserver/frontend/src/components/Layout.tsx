@@ -46,6 +46,12 @@ export default function Layout({ children }: LayoutProps) {
                                 Anybox
                             </Link>
                             <Link
+                                to="/prompt"
+                                className={`nav-link ${isActive('/prompt') ? 'active' : ''}`}
+                            >
+                                Prompt
+                            </Link>
+                            <Link
                                 to="/rsync"
                                 className={`nav-link ${isActive('/rsync') ? 'active' : ''}`}
                             >

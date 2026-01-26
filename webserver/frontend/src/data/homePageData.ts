@@ -40,6 +40,18 @@ export const toolsData: ToolCardData[] = [
         ],
     },
     {
+        name: 'Prompt',
+        path: '/prompt',
+        icon: '💬',
+        description: 'AI Prompt 模板管理工具，支持版本控制和分类',
+        features: [
+            'Prompt 模板 CRUD',
+            '分类和标签管理',
+            '版本控制',
+            '变量占位符支持',
+        ],
+    },
+    {
         name: 'OCR',
         path: '/ocr',
         icon: '📝',
