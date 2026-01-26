@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::NaiveDateTime;
-use mysql_async::{params, prelude::*, Pool, Row};
+use mysql_async::{Pool, Row, params, prelude::*};
 use tracing::{debug, info};
 
 use crate::models::{PaginatedResult, PaginationParams, PromptCategory, PromptTemplate};
@@ -14,10 +14,13 @@ pub struct PromptTemplateManager {
 impl PromptTemplateManager {
     pub async fn new(config: config::prompt::PromptConfig) -> Result<Self> {
         let url = config.mysql.connection_url();
-        info!("Connecting to MySQL: {}:{}", config.mysql.host, config.mysql.port);
+        info!(
+            "Connecting to MySQL: {}:{}",
+            config.mysql.host, config.mysql.port
+        );
 
         let pool = Pool::new(mysql_async::Opts::from_url(&url).context("Invalid MySQL URL")?);
-        
+
         let manager = Self {
             pool,
             table_name: format!("{}templates", config.table_prefix),
@@ -30,8 +33,12 @@ impl PromptTemplateManager {
     }
 
     async fn init_table(&self) -> Result<()> {
-        let mut conn = self.pool.get_conn().await.context("Failed to get MySQL connection")?;
-        
+        let mut conn = self
+            .pool
+            .get_conn()
+            .await
+            .context("Failed to get MySQL connection")?;
+
         let create_table_sql = format!(
             r#"CREATE TABLE IF NOT EXISTS `{}` (
                 `id` VARCHAR(36) NOT NULL PRIMARY KEY,
@@ -63,7 +70,11 @@ impl PromptTemplateManager {
     }
 
     pub async fn create(&self, template: PromptTemplate) -> Result<PromptTemplate> {
-        let mut conn = self.pool.get_conn().await.context("Failed to get MySQL connection")?;
+        let mut conn = self
+            .pool
+            .get_conn()
+            .await
+            .context("Failed to get MySQL connection")?;
 
         let variables_json = serde_json::to_string(&template.variables)?;
         let tags_json = serde_json::to_string(&template.tags)?;
@@ -96,12 +107,19 @@ impl PromptTemplateManager {
         .await
         .context("Failed to insert prompt template")?;
 
-        info!("✅ Created PromptTemplate: id={}, name={}", template.id, template.name);
+        info!(
+            "✅ Created PromptTemplate: id={}, name={}",
+            template.id, template.name
+        );
         Ok(template)
     }
 
     pub async fn get(&self, id: &str) -> Result<Option<PromptTemplate>> {
-        let mut conn = self.pool.get_conn().await.context("Failed to get MySQL connection")?;
+        let mut conn = self
+            .pool
+            .get_conn()
+            .await
+            .context("Failed to get MySQL connection")?;
 
         let select_sql = format!(
             "SELECT id, name, description, category, content, variables, tags, version, is_active, created_at, updated_at, created_by FROM `{}` WHERE id = :id",
@@ -127,7 +145,11 @@ impl PromptTemplateManager {
     }
 
     pub async fn list(&self, params: PaginationParams) -> Result<PaginatedResult<PromptTemplate>> {
-        let mut conn = self.pool.get_conn().await.context("Failed to get MySQL connection")?;
+        let mut conn = self
+            .pool
+            .get_conn()
+            .await
+            .context("Failed to get MySQL connection")?;
 
         let count_sql = format!("SELECT COUNT(*) FROM `{}`", self.table_name);
         let total: u64 = conn
@@ -146,7 +168,10 @@ impl PromptTemplateManager {
         );
 
         let rows: Vec<Row> = conn
-            .exec(&select_sql, params! { "limit" => params.limit(), "offset" => params.offset() })
+            .exec(
+                &select_sql,
+                params! { "limit" => params.limit(), "offset" => params.offset() },
+            )
             .await
             .context("Failed to list templates")?;
 
@@ -155,12 +180,19 @@ impl PromptTemplateManager {
             items.push(self.row_to_template(row)?);
         }
 
-        debug!("Listed PromptTemplates: page={}, page_size={}, total={}", params.page, params.page_size, total);
+        debug!(
+            "Listed PromptTemplates: page={}, page_size={}, total={}",
+            params.page, params.page_size, total
+        );
         Ok(PaginatedResult::new(items, total, &params))
     }
 
     pub async fn update(&self, template: PromptTemplate) -> Result<PromptTemplate> {
-        let mut conn = self.pool.get_conn().await.context("Failed to get MySQL connection")?;
+        let mut conn = self
+            .pool
+            .get_conn()
+            .await
+            .context("Failed to get MySQL connection")?;
 
         let variables_json = serde_json::to_string(&template.variables)?;
         let tags_json = serde_json::to_string(&template.tags)?;
@@ -203,7 +235,11 @@ impl PromptTemplateManager {
     }
 
     pub async fn delete(&self, id: &str) -> Result<bool> {
-        let mut conn = self.pool.get_conn().await.context("Failed to get MySQL connection")?;
+        let mut conn = self
+            .pool
+            .get_conn()
+            .await
+            .context("Failed to get MySQL connection")?;
 
         let delete_sql = format!("DELETE FROM `{}` WHERE id = :id", self.table_name);
         let affected = conn
@@ -220,12 +256,23 @@ impl PromptTemplateManager {
         Ok(success)
     }
 
-    pub async fn search_by_name(&self, name: &str, params: PaginationParams) -> Result<PaginatedResult<PromptTemplate>> {
-        let mut conn = self.pool.get_conn().await.context("Failed to get MySQL connection")?;
+    pub async fn search_by_name(
+        &self,
+        name: &str,
+        params: PaginationParams,
+    ) -> Result<PaginatedResult<PromptTemplate>> {
+        let mut conn = self
+            .pool
+            .get_conn()
+            .await
+            .context("Failed to get MySQL connection")?;
 
         let search_pattern = format!("%{name}%");
 
-        let count_sql = format!("SELECT COUNT(*) FROM `{}` WHERE name LIKE :pattern", self.table_name);
+        let count_sql = format!(
+            "SELECT COUNT(*) FROM `{}` WHERE name LIKE :pattern",
+            self.table_name
+        );
         let total: u64 = conn
             .exec_first(&count_sql, params! { "pattern" => &search_pattern })
             .await

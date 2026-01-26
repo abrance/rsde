@@ -5,7 +5,9 @@ use axum::{
     response::Json,
     routing::{get, post},
 };
-use prompt::{PaginatedResult, PaginationParams, PromptCategory, PromptTemplate, PromptTemplateManager};
+use prompt::{
+    PaginatedResult, PaginationParams, PromptCategory, PromptTemplate, PromptTemplateManager,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -177,7 +179,7 @@ async fn list_prompts(
     );
 
     let manager = state.manager.lock().await;
-    
+
     let result = if let Some(name) = params.name {
         manager.search_by_name(&name, params.pagination).await
     } else {
@@ -212,7 +214,7 @@ async fn update_prompt(
     info!("Updating PromptTemplate: id={}", id);
 
     let manager = state.manager.lock().await;
-    
+
     let existing = match manager.get(&id).await {
         Ok(Some(t)) => t,
         Ok(None) => {
