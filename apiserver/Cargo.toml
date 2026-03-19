@@ -5,7 +5,6 @@ version.workspace = true
 
 [dependencies]
 util = { path = "../common/util", features = ["metrics"] }
-core = { path = "../common/core" }
 config = { path = "../common/config" }
 pic_recog = { path = "../pic_recog" }
 anybox = { path = "../anybox" }

@@ -13,7 +13,6 @@ path = "src/lib.rs"
 
 [dependencies]
 util = { path = "../common/util" }
-core = { path = "../common/core" }
 clap.workspace = true
 tokio.workspace = true
 serde.workspace = true
