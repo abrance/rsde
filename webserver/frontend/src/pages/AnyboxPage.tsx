@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import './ToolPage.css'
 
 interface TextBox {
@@ -46,12 +46,22 @@ export default function AnyboxPage() {
     const [viewId, setViewId] = useState('')
     const [viewedTextBox, setViewedTextBox] = useState<TextBox | null>(null)
     const [viewing, setViewing] = useState(false)
+    const [copyStatus, setCopyStatus] = useState('')
+    const copyTimerRef = useRef<number | null>(null)
 
     useEffect(() => {
         if (activeTab === 'list') {
             fetchTextBoxes()
         }
     }, [activeTab, currentPage])
+
+    useEffect(() => {
+        return () => {
+            if (copyTimerRef.current !== null) {
+                window.clearTimeout(copyTimerRef.current)
+            }
+        }
+    }, [])
 
     const fetchTextBoxes = async () => {
         setLoading(true)
@@ -129,6 +139,7 @@ export default function AnyboxPage() {
 
         setViewing(true)
         setViewedTextBox(null)
+        setCopyStatus('')
 
         try {
             const response = await fetch(`/api/anybox/textbox/${targetId.trim()}`)
@@ -144,6 +155,32 @@ export default function AnyboxPage() {
         } finally {
             setViewing(false)
         }
+    }
+
+    const handleCopy = async () => {
+        if (!viewedTextBox?.content) return
+
+        if (!navigator.clipboard?.writeText) {
+            setCopyStatus('❌ 当前环境不支持复制')
+            return
+        }
+
+        try {
+            await navigator.clipboard.writeText(viewedTextBox.content)
+            setCopyStatus('✅ 复制成功')
+        } catch (err) {
+            console.warn('复制失败:', err)
+            setCopyStatus('❌ 复制失败')
+        }
+
+        if (copyTimerRef.current !== null) {
+            window.clearTimeout(copyTimerRef.current)
+        }
+
+        copyTimerRef.current = window.setTimeout(() => {
+            setCopyStatus('')
+            copyTimerRef.current = null
+        }, 2000)
     }
 
     const handleDelete = async (id: string) => {
@@ -550,10 +587,21 @@ export default function AnyboxPage() {
                                         )}
                                     </div>
                                     <div style={{ marginTop: '20px' }}>
-                                        <h4>内容:</h4>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                                            <h4 style={{ margin: 0 }}>内容:</h4>
+                                            <button
+                                                className="btn"
+                                                onClick={handleCopy}
+                                                style={{ padding: '4px 12px', fontSize: '0.9em' }}
+                                                disabled={!viewedTextBox.content}
+                                            >
+                                                {copyStatus || '📋 复制内容'}
+                                            </button>
+                                        </div>
                                         <pre className="result-content" style={{
                                             whiteSpace: 'pre-wrap',
-                                            wordBreak: 'break-word'
+                                            wordBreak: 'break-word',
+                                            marginTop: 0
                                         }}>
                                             {viewedTextBox.content}
                                         </pre>
