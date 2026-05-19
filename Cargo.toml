@@ -49,3 +49,5 @@ metrics-exporter-prometheus = "0.18.1"
 metrics-util = "0.20"
 http-body-util = "0.1"
 mysql_async = { version = "0.36", default-features = false, features = ["minimal", "chrono"] }
+russh = "0.60.2"
+russh-sftp = "2.1.2"
