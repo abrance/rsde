@@ -1,4 +1,5 @@
 mod anybox;
+mod datalink_engine;
 mod image;
 mod ocr;
 mod prompt;
@@ -66,6 +67,7 @@ async fn main() -> anyhow::Result<()> {
         .expect("配置文件中缺少 [image_hosting] 部分");
     let anybox_config = global_config.anybox;
     let prompt_config = global_config.prompt;
+    let datalink_engine_config = global_config.datalink_engine;
     let apiserver_config = global_config.apiserver.unwrap_or_default();
     info!("配置加载成功");
 
@@ -105,6 +107,12 @@ async fn main() -> anyhow::Result<()> {
         info!("启用 Prompt 服务");
         let prompt_routes = prompt::create_routes(prompt_cfg).await?;
         app = app.nest("/api/prompt", prompt_routes);
+    }
+
+    if let Some(datalink_cfg) = datalink_engine_config {
+        info!("启用 DataLink Engine 服务");
+        let datalink_routes = datalink_engine::create_routes(datalink_cfg)?;
+        app = app.nest("/api/datalink/v1", datalink_routes);
     }
 
     if !has_frontend {
