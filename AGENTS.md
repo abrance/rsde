@@ -1,11 +1,12 @@
 # AGENTS.md - AI Coding Agent Guidelines for rsde
 
-> rsde(xy) is a Rust-based Kubernetes toolset providing data sync (rsync), remote config (rc), OCR (pic_recog), unified API gateway (apiserver), and text sharing (anybox).
+> rsde(xy) is a Rust-based Kubernetes toolset providing data sync (rsync), remote config (rc), OCR (pic_recog), datalink metadata management (datalink-engine), unified API gateway (apiserver), and text sharing (anybox).
 
 ## Project Overview
 
-This is a **monorepo Rust workspace** with 6 main packages:
+This is a **monorepo Rust workspace** with 7 main packages:
 - `apiserver` - Axum-based API gateway with integrated React frontend
+- `datalink-engine` - Data link metadata domain/service crate with repository backends and validation rules
 - `rsync` - Data synchronization tool with rule engine (`lib/rule`)
 - `rc` - Remote configuration CLI tool for middleware testing
 - `pic_recog` - OCR recognition library with multiple engine support
@@ -25,6 +26,7 @@ cargo build --release
 # Build specific package
 cargo build -p rsync
 cargo build -p apiserver
+cargo build -p datalink-engine
 cargo build -p rc
 cargo build -p pic_recog
 cargo build -p anybox
@@ -34,6 +36,7 @@ cargo test --workspace
 
 # Run tests for specific package
 cargo test -p rule --all-features
+cargo test -p datalink-engine
 
 # Run single test
 cargo test test_name                    # by name
@@ -94,6 +97,10 @@ make run-apiserver
 ```
 
 Config file location: `manifest/dev/remote_ocr.toml`
+
+If you want to exercise the DataLink routes locally, the loaded config must also include a
+`[datalink_engine]` block. `backend = "memory"` is currently supported; the MySQL backend
+configuration surface exists but still returns `BackendNotSupported`.
 
 ### Local Kubernetes (xy namespace)
 
@@ -264,6 +271,7 @@ mod tests {
 ```
 rsde/
 ├── apiserver/         # API gateway (axum-based web server with integrated React frontend)
+├── datalink-engine/   # Data link metadata domain/service crate
 ├── rsync/             # Data sync tool
 │   └── lib/rule/      # Core Source→Transform→Sink abstractions
 ├── rc/                # Remote config management CLI tool
@@ -339,8 +347,9 @@ The GitHub Actions workflow (`.github/workflows/rsync-ci.yml`) runs:
 1. **Missing frontend build**: Run `cd webserver && make build` before `apiserver`
 2. **Blocking in async**: Use `tokio::task::spawn_blocking` for sync operations
 3. **Config loading**: Check `API_CONFIG` env var, defaults to `apiserver/config.toml`
-4. **Test file placement**: Use `*_test.rs` suffix, not `test_*.rs`
-5. **Kafka/Redis connectivity**: Ensure proper SASL configuration for authenticated clusters
+4. **DataLink backend support**: `datalink_engine.backend = "memory"` works today; `mysql` is config-only for now
+5. **Test file placement**: Use `*_test.rs` suffix, not `test_*.rs`
+6. **Kafka/Redis connectivity**: Ensure proper SASL configuration for authenticated clusters
 
 ## Environment Variables
 
@@ -356,6 +365,12 @@ The GitHub Actions workflow (`.github/workflows/rsync-ci.yml`) runs:
 - Serves both API routes (`/api/*`) and static frontend files
 - Requires frontend to be built before running (`webserver/frontend/dist` must exist)
 - Integrates metrics endpoint at `/metrics`
+- Mounts `/api/datalink/v1` when `GlobalConfig::datalink_engine` is configured
+
+### datalink-engine
+- Owns the V1 DataLink domain model, repository abstraction, validation rules, and bootstrap helpers
+- Current supported runtime backend is in-memory storage
+- MySQL wiring is intentionally a placeholder until persistence is implemented
 
 ### rsync
 - Uses file watching to dynamically load rule configurations
