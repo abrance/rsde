@@ -4,6 +4,7 @@
 
 pub mod anybox;
 pub mod apiserver;
+pub mod datalink_engine;
 pub mod image_host;
 pub mod mysql;
 pub mod ocr;
@@ -51,6 +52,10 @@ pub struct GlobalConfig {
     /// Prompt 配置
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<prompt::PromptConfig>,
+
+    /// DataLink Engine 配置
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub datalink_engine: Option<datalink_engine::DataLinkEngineConfig>,
 }
 
 impl ConfigLoader for GlobalConfig {

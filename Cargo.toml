@@ -1,5 +1,14 @@
 [workspace]
-members = ["rsync", "rc", "common/*", "apiserver", "pic_recog", "anybox", "prompt"]
+members = [
+    "rsync",
+    "rc",
+    "common/*",
+    "apiserver",
+    "pic_recog",
+    "anybox",
+    "prompt",
+    "datalink-engine",
+]
 resolver = "2"
 
 [workspace.package]
