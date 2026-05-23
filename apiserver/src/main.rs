@@ -2,6 +2,7 @@ mod anybox;
 mod image;
 mod ocr;
 mod prompt;
+use apiserver::object_storage;
 
 use axum::Router;
 use config::{ConfigLoader, GlobalConfig};
@@ -66,6 +67,7 @@ async fn main() -> anyhow::Result<()> {
         .expect("配置文件中缺少 [image_hosting] 部分");
     let anybox_config = global_config.anybox;
     let prompt_config = global_config.prompt;
+    let object_storage_config = global_config.object_storage;
     let apiserver_config = global_config.apiserver.unwrap_or_default();
     info!("配置加载成功");
 
@@ -105,6 +107,13 @@ async fn main() -> anyhow::Result<()> {
         info!("启用 Prompt 服务");
         let prompt_routes = prompt::create_routes(prompt_cfg).await?;
         app = app.nest("/api/prompt", prompt_routes);
+    }
+
+    // 添加 Object Storage 路由（如果配置存在）
+    if let Some(object_storage_cfg) = object_storage_config {
+        info!("启用 Object Storage 服务");
+        let object_storage_routes = object_storage::create_routes(object_storage_cfg);
+        app = app.nest("/api/object-storage", object_storage_routes);
     }
 
     if !has_frontend {
