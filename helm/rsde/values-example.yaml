@@ -20,6 +20,7 @@ image:
 service:
   type: ClusterIP
   port: 3000
+  targetPort: 3000
   # 如果使用 NodePort
   # nodePort: 30000
   annotations: {}
@@ -56,6 +57,7 @@ readinessProbe:
 # 持久化存储 - 图片上传需要
 persistence:
   enabled: true
+  mountPath: "/app/uploads"
   storageClass: "your-storage-class"  # 例如: nfs-client, local-path
   size: 20Gi
   accessMode: ReadWriteOnce
@@ -96,6 +98,21 @@ config:
     cleanup_interval_secs: 7200  # 2小时
     file_expire_secs: 7200       # 2小时
 
+  # DataLink Engine 配置
+  # 当前可用 backend: memory
+  # mysql 配置面已预留，但后端实现暂未完成，选择 mysql 时会返回未支持错误。
+  datalink_engine:
+    backend: "memory"
+    # mysql:
+    #   host: "mysql.namespace.svc.cluster.local"
+    #   port: 3306
+    #   user: "root"
+    #   password: "your-password"
+    #   database: "rsde"
+    #   max_connections: 10
+    #   min_connections: 1
+    #   connect_timeout_secs: 10
+
 # 环境变量
 env:
   - name: RUST_LOG
@@ -132,6 +149,3 @@ podAnnotations:
   prometheus.io/scrape: "true"
   prometheus.io/port: "3000"
   prometheus.io/path: "/metrics"
-
-service:
-  annotations: {}
