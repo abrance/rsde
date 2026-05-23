@@ -6,6 +6,7 @@ import RcPage from './pages/RcPage'
 import OcrPage from './pages/OcrPage'
 import AnyboxPage from './pages/AnyboxPage'
 import PromptPage from './pages/PromptPage'
+import ObjectStoragePage from './pages/ObjectStoragePage'
 import './App.css'
 
 function App() {
@@ -19,6 +20,7 @@ function App() {
                     <Route path="/anybox" element={<AnyboxPage />} />
                     <Route path="/prompt" element={<PromptPage />} />
                     <Route path="/rsync" element={<RsyncPage />} />
+                    <Route path="/object-storage" element={<ObjectStoragePage />} />
                 </Routes>
             </Layout>
         </Router>
