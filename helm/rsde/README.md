@@ -1,6 +1,6 @@
 # RSDE Helm Chart
 
-Helm chart for deploying RSDE apiserver with Anybox, OCR and image hosting services.
+Helm chart for deploying RSDE apiserver with Anybox, OCR, image hosting and object storage services.
 
 ## 快速开始
 
@@ -18,6 +18,7 @@ cp values-example.yaml values.yaml
 - **镜像配置**: `image.repository` 和 `image.tag`
 - **Redis 连接**: `config.anybox.redis_url`
 - **OCR 认证**: `config.remote_ocr.*` 相关字段
+- **对象存储**: `config.object_storage.*` 相关字段（如果启用对象存储）
 - **存储配置**: `persistence.storageClass` 和 `persistence.size`
 
 > ⚠️ **重要**: `values.yaml` 包含敏感信息，已加入 `.helmignore`，不会被打包或提交到仓库。
@@ -45,7 +46,12 @@ helm install rsde-apiserver ./helm/rsde \
   --set config.anybox.redis_url="redis://:password@redis-host:6379/" \
   --set config.remote_ocr.auth_token="your-token" \
   --set config.remote_ocr.auth_uuid="your-uuid" \
-  --set config.remote_ocr.auth_cookie="your-cookie"
+  --set config.remote_ocr.auth_cookie="your-cookie" \
+  --set config.object_storage.access_key="your-qiniu-access-key" \
+  --set config.object_storage.secret_key="your-qiniu-secret-key" \
+  --set config.object_storage.bucket="your-bucket-name" \
+  --set config.object_storage.region="z0" \
+  --set config.object_storage.domain="your-bucket-domain.example.com"
 ```
 
 #### 使用外部 values 文件（生产环境）
@@ -92,6 +98,23 @@ helm uninstall rsde-apiserver --namespace xy
 | `config.remote_ocr.auth_token` | OCR 服务认证 token |
 | `config.remote_ocr.auth_uuid` | OCR 服务认证 UUID |
 | `config.remote_ocr.auth_cookie` | OCR 服务认证 Cookie |
+
+### 对象存储配置（可选）
+
+如果需要使用七牛云对象存储功能，需要保留并配置 `config.object_storage`：
+
+| 参数 | 说明 |
+|------|------|
+| `config.object_storage.access_key` | 七牛云 Access Key |
+| `config.object_storage.secret_key` | 七牛云 Secret Key |
+| `config.object_storage.bucket` | Bucket 名称 |
+| `config.object_storage.region` | 七牛云区域标识，可选 `z0`、`z1`、`z2`、`na0`、`as0` |
+| `config.object_storage.domain` | Bucket 访问域名，公开 bucket 可使用 |
+| `config.object_storage.public_base_url` | 显式公开访问 URL 前缀 |
+| `config.object_storage.bucket_is_private` | Bucket 是否为私有 |
+| `config.object_storage.path_prefix` | 部署级别的逻辑路径前缀约束 |
+
+如果不需要对象存储功能，可以删除整个 `config.object_storage` 配置块；apiserver 会跳过对象存储路由注册。
 
 ### 存储配置
 
@@ -167,7 +190,7 @@ kubectl describe pod -n xy -l app.kubernetes.io/name=rsde-apiserver
 1. ✅ **不要提交** `values.yaml` 到版本控制系统
 2. ✅ 使用 **Kubernetes Secrets** 管理敏感信息（高级用法）
 3. ✅ 在 CI/CD 中使用**环境变量**或**安全存储**传递敏感配置
-4. ✅ 定期**轮换** OCR 认证信息
+4. ✅ 定期**轮换** OCR 和对象存储认证信息
 5. ✅ 使用 **RBAC** 限制对配置的访问
 
 ## CI/CD 集成
@@ -183,7 +206,9 @@ GitHub Actions 示例（已在 `.github/workflows/rsync-ci.yml` 中实现）：
       --set image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} \
       --set image.tag=${{ github.sha }} \
       --set config.anybox.redis_url="${{ secrets.REDIS_URL }}" \
-      --set config.remote_ocr.auth_token="${{ secrets.OCR_TOKEN }}"
+      --set config.remote_ocr.auth_token="${{ secrets.OCR_TOKEN }}" \
+      --set config.object_storage.access_key="${{ secrets.QINIU_ACCESS_KEY }}" \
+      --set config.object_storage.secret_key="${{ secrets.QINIU_SECRET_KEY }}"
 ```
 
 使用 GitHub Secrets 存储敏感信息，通过 `--set` 覆盖配置。
