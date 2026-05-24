@@ -1,4 +1,5 @@
 mod anybox;
+mod datalink_engine;
 mod image;
 mod ocr;
 mod prompt;
@@ -68,6 +69,7 @@ async fn main() -> anyhow::Result<()> {
     let anybox_config = global_config.anybox;
     let prompt_config = global_config.prompt;
     let object_storage_config = global_config.object_storage;
+    let datalink_engine_config = global_config.datalink_engine;
     let apiserver_config = global_config.apiserver.unwrap_or_default();
     info!("配置加载成功");
 
@@ -114,6 +116,13 @@ async fn main() -> anyhow::Result<()> {
         info!("启用 Object Storage 服务");
         let object_storage_routes = object_storage::create_routes(object_storage_cfg);
         app = app.nest("/api/object-storage", object_storage_routes);
+    }
+
+    // 添加 DataLink Engine 路由（如果配置存在）
+    if let Some(datalink_cfg) = datalink_engine_config {
+        info!("启用 DataLink Engine 服务");
+        let datalink_routes = datalink_engine::create_routes(datalink_cfg)?;
+        app = app.nest("/api/datalink/v1", datalink_routes);
     }
 
     if !has_frontend {

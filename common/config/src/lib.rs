@@ -4,6 +4,7 @@
 
 pub mod anybox;
 pub mod apiserver;
+pub mod datalink_engine;
 pub mod image_host;
 pub mod mysql;
 pub mod nodemanage;
@@ -57,6 +58,10 @@ pub struct GlobalConfig {
     /// 对象存储配置
     #[serde(skip_serializing_if = "Option::is_none")]
     pub object_storage: Option<object_storage::ObjectStorageConfig>,
+
+    /// DataLink Engine 配置
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub datalink_engine: Option<datalink_engine::DataLinkEngineConfig>,
 }
 
 impl ConfigLoader for GlobalConfig {

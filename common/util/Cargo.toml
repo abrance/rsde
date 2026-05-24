@@ -22,6 +22,8 @@ metrics-exporter-prometheus = { workspace = true }
 metrics-util = { workspace = true }
 http-body-util = { workspace = true }
 mysql_async = { workspace = true }
+russh = { workspace = true }
+russh-sftp = { workspace = true }
 axum = { workspace = true, optional = true }
 
 [features]
@@ -32,3 +34,8 @@ metrics = ["dep:axum"]
 # Kafka client 集成测试
 name = "tp_kafka_client"
 path = "../../test/plan/tp_kafka_client.rs"
+
+[[test]]
+# SSH client 集成测试
+name = "tp_ssh_client"
+path = "../../test/plan/tp_ssh_client.rs"

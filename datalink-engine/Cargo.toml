@@ -1,0 +1,11 @@
+[package]
+name = "datalink-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+config = { path = "../common/config" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }

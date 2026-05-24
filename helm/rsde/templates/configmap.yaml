@@ -61,6 +61,23 @@ data:
     bucket_is_private = {{ .Values.config.object_storage.bucket_is_private | default false }}
     {{- end }}
 
+    {{- if .Values.config.datalink_engine }}
+    [datalink_engine]
+    backend = {{ .Values.config.datalink_engine.backend | default "memory" | quote }}
+
+    {{- with .Values.config.datalink_engine.mysql }}
+    [datalink_engine.mysql]
+    host = {{ .host | quote }}
+    port = {{ .port }}
+    user = {{ .user | quote }}
+    password = {{ .password | quote }}
+    database = {{ .database | quote }}
+    max_connections = {{ .max_connections }}
+    min_connections = {{ .min_connections }}
+    connect_timeout_secs = {{ .connect_timeout_secs }}
+    {{- end }}
+    {{- end }}
+
     {{- if .Values.config.prompt }}
     [prompt]
     table_prefix = {{ .Values.config.prompt.table_prefix | quote }}
