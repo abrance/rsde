@@ -3,7 +3,7 @@ mod datalink_engine;
 mod image;
 mod ocr;
 mod prompt;
-use apiserver::object_storage;
+use apiserver::{build_frontend_router, object_storage};
 
 use axum::Router;
 use config::{ConfigLoader, GlobalConfig};
@@ -15,7 +15,6 @@ use std::{
 use tower::ServiceBuilder;
 use tower_http::{
     cors::{Any, CorsLayer},
-    services::{ServeDir, ServeFile},
     trace::TraceLayer,
 };
 use tracing::{error, info};
@@ -84,8 +83,6 @@ async fn main() -> anyhow::Result<()> {
 
     // 前端静态文件目录
     let frontend_dir = "webserver/frontend/dist";
-    let index_file = format!("{frontend_dir}/index.html");
-
     let has_frontend = Path::new(&frontend_dir).exists();
 
     let mut app = Router::new()
@@ -130,11 +127,7 @@ async fn main() -> anyhow::Result<()> {
         error!("运行 'cd webserver/frontend && npm run build' 构建前端");
         panic!("前端文件未找到，服务器启动中止");
     } else {
-        app = app
-            .nest_service("/assets", ServeDir::new(format!("{frontend_dir}/assets")))
-            .fallback_service(
-                ServeDir::new(frontend_dir).not_found_service(ServeFile::new(&index_file)),
-            );
+        app = app.merge(build_frontend_router(frontend_dir));
         info!("前端服务已启用");
     }
 
