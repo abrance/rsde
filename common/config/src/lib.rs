@@ -7,6 +7,8 @@ pub mod apiserver;
 pub mod datalink_engine;
 pub mod image_host;
 pub mod mysql;
+pub mod nodemanage;
+pub mod object_storage;
 pub mod ocr;
 pub mod prompt;
 pub mod redis;
@@ -53,6 +55,10 @@ pub struct GlobalConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<prompt::PromptConfig>,
 
+    /// 对象存储配置
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub object_storage: Option<object_storage::ObjectStorageConfig>,
+
     /// DataLink Engine 配置
     #[serde(skip_serializing_if = "Option::is_none")]
     pub datalink_engine: Option<datalink_engine::DataLinkEngineConfig>,
@@ -61,7 +67,200 @@ pub struct GlobalConfig {
 impl ConfigLoader for GlobalConfig {
     fn from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
         let content = fs::read_to_string(path)?;
-        let config: Self = toml::from_str(&content)?;
+        let mut config: Self = toml::from_str(&content)?;
+        config.validate()?;
         Ok(config)
+    }
+}
+
+impl GlobalConfig {
+    pub fn validate(&mut self) -> anyhow::Result<()> {
+        if let Some(ref storage) = self.object_storage {
+            storage.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn object_storage_config_can_be_deserialized() {
+        let raw = r#"
+            [object_storage]
+            access_key = "ak"
+            secret_key = "sk"
+            bucket = "bucket-a"
+            region = "z0"
+            domain = "cdn.example.com"
+            bucket_is_private = true
+        "#;
+
+        let cfg: GlobalConfig = toml::from_str(raw).unwrap();
+        let storage = cfg.object_storage.expect("object_storage should exist");
+        assert_eq!(storage.bucket, "bucket-a");
+        assert_eq!(storage.region, "z0");
+        assert!(storage.bucket_is_private);
+    }
+
+    #[test]
+    fn object_storage_config_fails_on_load_with_invalid_region() {
+        let raw = r#"
+            [object_storage]
+            access_key = "ak"
+            secret_key = "sk"
+            bucket = "bucket-a"
+            region = "invalid-region"
+            domain = "cdn.example.com"
+        "#;
+
+        let cfg: GlobalConfig = toml::from_str(raw).unwrap();
+        let result = cfg.object_storage.as_ref().unwrap().validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not allowed"));
+    }
+
+    #[test]
+    fn object_storage_config_fails_on_load_with_empty_required_fields() {
+        let raw = r#"
+            [object_storage]
+            access_key = ""
+            secret_key = "sk"
+            bucket = "bucket-a"
+            region = "z0"
+            domain = "cdn.example.com"
+        "#;
+
+        let cfg: GlobalConfig = toml::from_str(raw).unwrap();
+        let result = cfg.object_storage.as_ref().unwrap().validate();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn object_storage_config_fails_on_load_public_bucket_without_domain() {
+        let raw = r#"
+            [object_storage]
+            access_key = "ak"
+            secret_key = "sk"
+            bucket = "bucket-a"
+            region = "z0"
+            bucket_is_private = false
+        "#;
+
+        let cfg: GlobalConfig = toml::from_str(raw).unwrap();
+        let result = cfg.object_storage.as_ref().unwrap().validate();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn object_storage_config_fails_on_load_with_empty_domain_strings() {
+        let raw = r#"
+            [object_storage]
+            access_key = "ak"
+            secret_key = "sk"
+            bucket = "bucket-a"
+            region = "z0"
+            domain = ""
+            public_base_url = ""
+            bucket_is_private = false
+        "#;
+
+        let cfg: GlobalConfig = toml::from_str(raw).unwrap();
+        let result = cfg.object_storage.as_ref().unwrap().validate();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn object_storage_normalizes_path_prefix() {
+        let raw = r#"
+            [object_storage]
+            access_key = "ak"
+            secret_key = "sk"
+            bucket = "bucket-a"
+            region = "z0"
+            domain = "cdn.example.com"
+            path_prefix = "/team-a"
+        "#;
+
+        let cfg: GlobalConfig = toml::from_str(raw).unwrap();
+        let storage = cfg.object_storage.unwrap();
+        assert!(storage.validate().is_ok());
+        assert_eq!(
+            storage.normalized_path_prefix(),
+            Some("team-a/".to_string())
+        );
+    }
+
+    #[test]
+    fn object_storage_normalizes_path_prefix_like_runtime_rules() {
+        let raw = r#"
+            [object_storage]
+            access_key = "ak"
+            secret_key = "sk"
+            bucket = "bucket-a"
+            region = "z0"
+            domain = "cdn.example.com"
+            path_prefix = "//team-a//./images///"
+        "#;
+
+        let cfg: GlobalConfig = toml::from_str(raw).unwrap();
+        let storage = cfg.object_storage.unwrap();
+        assert!(storage.validate().is_ok());
+        assert_eq!(
+            storage.normalized_path_prefix(),
+            Some("team-a/images/".to_string())
+        );
+    }
+
+    #[test]
+    fn object_storage_config_rejects_invalid_path_prefix_segments() {
+        let raw = r#"
+            [object_storage]
+            access_key = "ak"
+            secret_key = "sk"
+            bucket = "bucket-a"
+            region = "z0"
+            domain = "cdn.example.com"
+            path_prefix = "team-a/../secret"
+        "#;
+
+        let cfg: GlobalConfig = toml::from_str(raw).unwrap();
+        let result = cfg.object_storage.as_ref().unwrap().validate();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn object_storage_config_passes_validation_on_load_with_valid_config() {
+        let raw = r#"
+            [object_storage]
+            access_key = "ak"
+            secret_key = "sk"
+            bucket = "bucket-a"
+            region = "z0"
+            domain = "cdn.example.com"
+            bucket_is_private = false
+        "#;
+
+        let cfg: GlobalConfig = toml::from_str(raw).unwrap();
+        let result = cfg.object_storage.as_ref().unwrap().validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn global_config_from_file_validates_object_storage() {
+        let raw = r#"
+            [object_storage]
+            access_key = "ak"
+            secret_key = "sk"
+            bucket = "bucket-a"
+            region = "invalid-region"
+            domain = "cdn.example.com"
+        "#;
+
+        let mut cfg: GlobalConfig = toml::from_str(raw).unwrap();
+        let result = cfg.validate();
+        assert!(result.is_err());
     }
 }

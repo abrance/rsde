@@ -57,6 +57,12 @@ export default function Layout({ children }: LayoutProps) {
                             >
                                 Rsync (todo)
                             </Link>
+                            <Link
+                                to="/object-storage"
+                                className={`nav-link ${isActive('/object-storage') ? 'active' : ''}`}
+                            >
+                                对象存储
+                            </Link>
                         </nav>
                     </div>
                 </div>

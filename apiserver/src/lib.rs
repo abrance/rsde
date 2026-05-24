@@ -1,6 +1,7 @@
 pub mod anybox;
 pub mod datalink_engine;
 pub mod image;
+pub mod object_storage;
 pub mod ocr;
 pub mod prompt;
 

@@ -47,6 +47,21 @@ metrics_enabled = true
 path = "./log/"
 
 # ============================================================================
+# 七牛云对象存储配置
+# ============================================================================
+[object_storage]
+access_key = "your_qiniu_access_key"
+secret_key = "your_qiniu_secret_key"
+bucket = "your-bucket-name"
+region = "z0"
+domain = "your-bucket-domain.example.com"
+public_base_url = "https://your-bucket-domain.example.com"
+upload_token_ttl_secs = 3600
+private_url_ttl_secs = 3600
+use_https = true
+bucket_is_private = false
+
+# ============================================================================
 # DataLink Engine 配置
 # ============================================================================
 # 当前支持的 backend: memory

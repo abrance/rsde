@@ -57,10 +57,10 @@ readinessProbe:
 # 持久化存储 - 图片上传需要
 persistence:
   enabled: true
-  mountPath: "/app/uploads"
   storageClass: "your-storage-class"  # 例如: nfs-client, local-path
   size: 20Gi
   accessMode: ReadWriteOnce
+  mountPath: /app/uploads
 
 # 应用配置
 config:
@@ -74,6 +74,21 @@ config:
     redis_url: "redis://:your-redis-password@redis-host.namespace.svc.cluster.local:6379/0"
     key_prefix: "anybox"
     cleanup_interval_secs: 3600
+
+  # 七牛云对象存储配置 - 如果不需要对象存储功能，可以删除整个 object_storage 配置块
+  # 注意：access_key 和 secret_key 是敏感信息，生产环境建议通过安全 values 文件或 --set 注入
+  object_storage:
+    access_key: "your-qiniu-access-key"
+    secret_key: "your-qiniu-secret-key"
+    bucket: "your-bucket-name"
+    region: "z0"  # 可选: z0, z1, z2, na0, as0
+    domain: "your-bucket-domain.example.com"
+    public_base_url: "https://your-bucket-domain.example.com"
+    upload_token_ttl_secs: 3600
+    private_url_ttl_secs: 3600
+    use_https: true
+    path_prefix: ""
+    bucket_is_private: false
 
   # OCR 配置 - 如果不需要 OCR 功能，可以删除整个 remote_ocr 配置块
   # 注意：这里需要替换为您实际的 OCR 服务地址和认证信息

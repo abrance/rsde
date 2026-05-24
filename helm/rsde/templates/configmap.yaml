@@ -40,6 +40,27 @@ data:
     key_prefix = {{ .Values.config.anybox.key_prefix | quote }}
     cleanup_interval_secs = {{ .Values.config.anybox.cleanup_interval_secs }}
 
+    {{- if .Values.config.object_storage }}
+    [object_storage]
+    access_key = {{ required "config.object_storage.access_key is required when object_storage is configured" .Values.config.object_storage.access_key | quote }}
+    secret_key = {{ required "config.object_storage.secret_key is required when object_storage is configured" .Values.config.object_storage.secret_key | quote }}
+    bucket = {{ required "config.object_storage.bucket is required when object_storage is configured" .Values.config.object_storage.bucket | quote }}
+    region = {{ required "config.object_storage.region is required when object_storage is configured" .Values.config.object_storage.region | quote }}
+    {{- with .Values.config.object_storage.domain }}
+    domain = {{ . | quote }}
+    {{- end }}
+    {{- with .Values.config.object_storage.public_base_url }}
+    public_base_url = {{ . | quote }}
+    {{- end }}
+    upload_token_ttl_secs = {{ .Values.config.object_storage.upload_token_ttl_secs | default 3600 }}
+    private_url_ttl_secs = {{ .Values.config.object_storage.private_url_ttl_secs | default 3600 }}
+    use_https = {{ .Values.config.object_storage.use_https | default true }}
+    {{- with .Values.config.object_storage.path_prefix }}
+    path_prefix = {{ . | quote }}
+    {{- end }}
+    bucket_is_private = {{ .Values.config.object_storage.bucket_is_private | default false }}
+    {{- end }}
+
     {{- if .Values.config.datalink_engine }}
     [datalink_engine]
     backend = {{ .Values.config.datalink_engine.backend | default "memory" | quote }}
