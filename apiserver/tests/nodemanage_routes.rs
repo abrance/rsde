@@ -4,21 +4,30 @@ use axum::{
 };
 use config::mysql::MysqlConfig;
 use serde_json::Value;
+use std::env;
 use tower::ServiceExt;
+
+fn mysql_test_config() -> MysqlConfig {
+    MysqlConfig {
+        host: env::var("MYSQL_HOST")
+            .unwrap_or_else(|_| "test-mysql.bkbase-test.svc.cluster.local".to_string()),
+        port: env::var("MYSQL_PORT")
+            .unwrap_or_else(|_| "3306".to_string())
+            .parse()
+            .unwrap_or(3306),
+        user: env::var("MYSQL_USER").unwrap_or_else(|_| "root".to_string()),
+        password: env::var("MYSQL_PASSWORD").unwrap_or_else(|_| "testpass".to_string()),
+        database: env::var("MYSQL_DATABASE").unwrap_or_else(|_| "prompt".to_string()),
+        max_connections: 10,
+        min_connections: 1,
+        connect_timeout_secs: 10,
+    }
+}
 
 fn mysql_backed_nodemanage_config(table_prefix: String) -> config::nodemanage::NodeManageConfig {
     config::nodemanage::NodeManageConfig {
         table_prefix,
-        mysql: Some(MysqlConfig {
-            host: "test-mysql.bkbase-test.svc.cluster.local".to_string(),
-            port: 3306,
-            user: "root".to_string(),
-            password: "testpass".to_string(),
-            database: "prompt".to_string(),
-            max_connections: 10,
-            min_connections: 1,
-            connect_timeout_secs: 10,
-        }),
+        mysql: Some(mysql_test_config()),
         ..Default::default()
     }
 }
@@ -27,16 +36,7 @@ fn mysql_backed_nodemanage_config(table_prefix: String) -> config::nodemanage::N
 fn nodemanage_assembly_applies_config_install_defaults_without_silent_fallback() {
     let config = config::nodemanage::NodeManageConfig {
         table_prefix: "node_contract_".to_string(),
-        mysql: Some(MysqlConfig {
-            host: "test-mysql.bkbase-test.svc.cluster.local".to_string(),
-            port: 3306,
-            user: "root".to_string(),
-            password: "testpass".to_string(),
-            database: "prompt".to_string(),
-            max_connections: 10,
-            min_connections: 1,
-            connect_timeout_secs: 10,
-        }),
+        mysql: Some(mysql_test_config()),
         rsagent_package_url: Some("https://example.com/from-config.tar.gz".to_string()),
         install_root: "/srv/rsagent".to_string(),
         register_callback_url: "http://10.0.0.1:3000/api/nodes/agent/register".to_string(),
@@ -171,6 +171,7 @@ async fn nodemanage_install_uses_config_package_url_when_request_omits_it() {
 }
 
 #[tokio::test]
+#[ignore = "requires reachable MySQL test environment; run with --ignored and MYSQL_* overrides if needed"]
 async fn nodemanage_register_persists_through_configured_repository_path() {
     let table_prefix = format!("node_route_test_{}_", uuid::Uuid::new_v4().simple());
     let config = mysql_backed_nodemanage_config(table_prefix.clone());
