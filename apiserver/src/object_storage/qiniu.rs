@@ -15,6 +15,8 @@ use std::time::Duration;
 #[derive(Clone)]
 pub struct QiniuObjectStorageBackend {
     bucket_name: String,
+    region: String,
+    use_https: bool,
     credential: Credential,
     objects_manager: ObjectsManager,
     upload_manager: UploadManager,
@@ -36,6 +38,8 @@ impl QiniuObjectStorageBackend {
 
         Self {
             bucket_name: config.bucket.clone(),
+            region: config.region.clone(),
+            use_https: config.use_https,
             credential,
             objects_manager,
             upload_manager,
@@ -158,7 +162,19 @@ impl ObjectStorageBackend for QiniuObjectStorageBackend {
     }
 
     fn upload_url(&self) -> String {
-        "https://upload.qiniup.com".to_string()
+        let scheme = if self.use_https { "https" } else { "http" };
+        format!("{}://{}", scheme, qiniu_upload_host(&self.region))
+    }
+}
+
+fn qiniu_upload_host(region: &str) -> &'static str {
+    match region {
+        "z0" => "up-z0.qiniup.com",
+        "z1" => "up-z1.qiniup.com",
+        "z2" => "up-z2.qiniup.com",
+        "na0" => "up-na0.qiniup.com",
+        "as0" => "up-as0.qiniup.com",
+        _ => "up.qiniup.com",
     }
 }
 
@@ -377,6 +393,26 @@ mod tests {
     fn test_normalize_prefix_empty() {
         let result = normalize_prefix("").unwrap();
         assert_eq!(result, "");
+    }
+
+    #[test]
+    fn qiniu_upload_url_uses_configured_region() {
+        let config = config::object_storage::ObjectStorageConfig {
+            access_key: "ak".to_string(),
+            secret_key: "sk".to_string(),
+            bucket: "bucket".to_string(),
+            region: "z2".to_string(),
+            domain: Some("example.com".to_string()),
+            public_base_url: None,
+            upload_token_ttl_secs: 3600,
+            private_url_ttl_secs: 3600,
+            use_https: true,
+            path_prefix: None,
+            bucket_is_private: false,
+        };
+        let backend = QiniuObjectStorageBackend::new(&config);
+
+        assert_eq!(backend.upload_url(), "https://up-z2.qiniup.com");
     }
 
     #[test]

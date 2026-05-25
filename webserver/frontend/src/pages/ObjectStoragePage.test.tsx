@@ -208,6 +208,7 @@ describe('ObjectStoragePage', () => {
                     data: {
                         upload_token: 'upload-token',
                         object_key: 'demo.txt',
+                        upload_key: 'team-a/demo.txt',
                         upload_url: 'https://upload.example.com',
                         expires_at: '2026-05-25T00:00:00Z',
                         bucket: 'test-bucket',
@@ -237,7 +238,7 @@ describe('ObjectStoragePage', () => {
         expect(uploadCall).toBeDefined()
         const uploadBody = uploadCall?.[1]?.body as FormData
         expect(uploadBody.get('token')).toBe('upload-token')
-        expect(uploadBody.get('key')).toBe('demo.txt')
+        expect(uploadBody.get('key')).toBe('team-a/demo.txt')
         expect(uploadBody.get('file')).toBe(file)
         expect(await screen.findByText('已上传 demo.txt')).toBeInTheDocument()
         expect(fetchMock).toHaveBeenLastCalledWith('/api/object-storage/objects')

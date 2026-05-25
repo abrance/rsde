@@ -216,6 +216,7 @@ impl ObjectStorageService {
         Ok(CreateUploadTokenResponse {
             upload_token,
             object_key: self.visible_key(&stored_key),
+            upload_key: stored_key,
             upload_url: self.backend.upload_url(),
             expires_at: expires_at(self.config.upload_token_ttl_secs),
             bucket: self.config.bucket.clone(),
@@ -653,6 +654,18 @@ mod tests {
         let service = test_service(Some("/team-a"));
         let deleted = service.delete_object("images/old.png").await.unwrap();
         assert_eq!(deleted.deleted_key, "images/old.png");
+    }
+
+    #[test]
+    fn upload_token_returns_exact_storage_key_for_form_upload() {
+        let service = test_service(Some("/team-a"));
+        let token = service
+            .create_upload_token(Some("images/2026/"), "demo.png")
+            .unwrap();
+
+        assert_eq!(token.object_key, "images/2026/demo.png");
+        assert_eq!(token.upload_key, "team-a/images/2026/demo.png");
+        assert_eq!(token.upload_token, "token:team-a/images/2026/demo.png");
     }
 
     #[tokio::test]

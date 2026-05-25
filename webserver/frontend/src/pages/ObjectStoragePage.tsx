@@ -44,6 +44,7 @@ type BatchDeleteResult = {
 type CreateUploadTokenData = {
     upload_token: string
     object_key: string
+    upload_key: string
     upload_url: string
 }
 
@@ -302,7 +303,7 @@ export default function ObjectStoragePage() {
 
             const formData = new FormData()
             formData.append('token', uploadData.upload_token)
-            formData.append('key', uploadData.object_key)
+            formData.append('key', uploadData.upload_key)
             formData.append('file', file)
 
             const uploadResponse = await fetch(uploadData.upload_url, {
