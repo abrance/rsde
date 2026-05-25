@@ -7,11 +7,12 @@
 ```
 common/config/
 ├── src/
-│   ├── lib.rs           # 主模块，定义 GlobalConfig
-│   ├── ocr.rs           # OCR 相关配置
-│   ├── apiserver.rs     # API Server 配置
-│   ├── object_storage.rs # 七牛云对象存储配置
-│   └── rsync.rs         # Rsync 服务配置
+│   ├── lib.rs              # 主模块，定义 GlobalConfig
+│   ├── ocr.rs              # OCR 相关配置
+│   ├── apiserver.rs        # API Server 配置
+│   ├── object_storage.rs   # 七牛云对象存储配置
+│   ├── nodemanage.rs       # NodeManage 节点管理配置
+│   └── rsync.rs            # Rsync 服务配置
 └── Cargo.toml
 ```
 
@@ -22,6 +23,7 @@ common/config (基础配置库，不依赖其他模块)
     ↑
     ├── pic_recog (使用 config::ocr::*)
     ├── apiserver (使用 config::GlobalConfig, config::ocr::*)
+    ├── nodemanage (通过 apiserver 读取 config::nodemanage::NodeManageConfig)
     ├── rsync (使用 config::rsync::*)
     └── rc (使用 config::*)
 ```
@@ -50,6 +52,10 @@ if let Some(ocr_config) = config.remote_ocr {
 
 if let Some(apiserver_config) = config.apiserver {
     // 使用 API Server 配置
+}
+
+if let Some(nodemanage_config) = config.nodemanage {
+    // 使用 NodeManage 配置
 }
 ```
 
@@ -86,6 +92,29 @@ perm_url = "https://example.com/api/perm"
 
 [rsync]
 # ... Rsync 配置
+
+[nodemanage]
+table_prefix = "node_"
+rsagent_package_url = "https://example.com/rsagent.tar.gz"
+install_root = "/opt/rsagent"
+register_callback_url = "http://127.0.0.1:3000/api/nodes/agent/register"
+register_wait_timeout_secs = 30
+ssh_connect_timeout_secs = 10
+
+[[nodemanage.install_plugins]]
+name = "metrics"
+version = "1.0.0"
+package_url = "https://example.com/plugins/metrics.tar.gz"
+
+[nodemanage.mysql]
+host = "127.0.0.1"
+port = 3306
+user = "root"
+password = "your_mysql_password_here"
+database = "rsde"
+max_connections = 10
+min_connections = 1
+connect_timeout_secs = 10
 ```
 
 参考 `config.example.toml` 获取完整示例。
@@ -114,6 +143,19 @@ perm_url = "https://example.com/api/perm"
 - 当 `bucket_is_private = false` 时，`domain` 或 `public_base_url` 至少要配置一个且非空字符串（不能仅为空白字符）
 - `path_prefix` 自动规范化：去除前后空白、移除前导 `/`、非空时添加尾部 `/`；若规范化后为空则返回 `None`
 - 配置验证在 `GlobalConfig::from_file()` 加载时自动执行，无效配置会导致启动失败
+
+### NodeManage 配置说明
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `table_prefix` | 否 | 节点管理表名前缀，默认 `node_`，后续 MySQL 持久化使用。 |
+| `rsagent_package_url` | 否 | 在线添加节点时安装的 rsagent 包地址；也可由 `/api/nodes/install` 请求体覆盖。 |
+| `install_root` | 否 | rsagent 默认安装目录，默认 `/opt/rsagent`。 |
+| `register_callback_url` | 否 | 远端 rsagent 安装完成后的回调注册地址。 |
+| `install_plugins` | 否 | 安装时默认需要下发的插件列表。 |
+| `register_wait_timeout_secs` | 否 | 等待 agent 注册成功的超时时间，默认 `30` 秒。 |
+| `ssh_connect_timeout_secs` | 否 | SSH 连接超时时间，单位秒，默认 `10`。 |
+| `[nodemanage.mysql]` | 否 | NodeManage 独立 MySQL 配置；未配置时当前实现使用内存仓储。 |
 
 ## 设计优势
 

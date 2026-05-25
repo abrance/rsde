@@ -1,6 +1,7 @@
 mod anybox;
 mod datalink_engine;
 mod image;
+mod nodemanage;
 mod ocr;
 mod prompt;
 use apiserver::{build_frontend_router, object_storage};
@@ -69,6 +70,7 @@ async fn main() -> anyhow::Result<()> {
     let prompt_config = global_config.prompt;
     let object_storage_config = global_config.object_storage;
     let datalink_engine_config = global_config.datalink_engine;
+    let nodemanage_config = global_config.nodemanage;
     let apiserver_config = global_config.apiserver.unwrap_or_default();
     info!("配置加载成功");
 
@@ -120,6 +122,12 @@ async fn main() -> anyhow::Result<()> {
         info!("启用 DataLink Engine 服务");
         let datalink_routes = datalink_engine::create_routes(datalink_cfg)?;
         app = app.nest("/api/datalink/v1", datalink_routes);
+    }
+
+    if let Some(nodemanage_cfg) = nodemanage_config {
+        info!("启用 NodeManage 服务");
+        let nodemanage_routes = nodemanage::create_routes(nodemanage_cfg).await?;
+        app = app.nest("/api/nodes", nodemanage_routes);
     }
 
     if !has_frontend {

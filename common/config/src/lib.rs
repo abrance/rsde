@@ -62,6 +62,10 @@ pub struct GlobalConfig {
     /// DataLink Engine 配置
     #[serde(skip_serializing_if = "Option::is_none")]
     pub datalink_engine: Option<datalink_engine::DataLinkEngineConfig>,
+
+    /// NodeManage 配置
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nodemanage: Option<nodemanage::NodeManageConfig>,
 }
 
 impl ConfigLoader for GlobalConfig {
@@ -262,5 +266,49 @@ mod tests {
         let mut cfg: GlobalConfig = toml::from_str(raw).unwrap();
         let result = cfg.validate();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn config_example_can_be_loaded() {
+        let config = GlobalConfig::from_file("../../config.example.toml").unwrap();
+
+        assert!(config.apiserver.is_some());
+        assert!(config.remote_ocr.is_some());
+        assert!(config.rsync.is_some());
+        assert!(config.object_storage.is_some());
+        assert!(config.datalink_engine.is_some());
+
+        let nodemanage = config.nodemanage.unwrap();
+        assert_eq!(nodemanage.table_prefix, "node_");
+        assert!(nodemanage.rsagent_package_url.is_some());
+        assert!(nodemanage.mysql.is_some());
+        assert_eq!(nodemanage.install_root, "/opt/rsagent");
+        assert_eq!(
+            nodemanage.register_callback_url,
+            "http://127.0.0.1:3000/api/nodes/agent/register"
+        );
+        assert_eq!(nodemanage.install_plugins.len(), 2);
+        assert_eq!(nodemanage.install_plugins[0].name, "metrics");
+        assert_eq!(nodemanage.install_plugins[1].name, "shell");
+        assert_eq!(nodemanage.register_wait_timeout_secs, 30);
+    }
+
+    #[test]
+    fn nodemanage_config_defaults_install_contract() {
+        let raw = r#"
+            [nodemanage]
+            rsagent_package_url = "https://example.com/rsagent.tar.gz"
+        "#;
+
+        let cfg: GlobalConfig = toml::from_str(raw).unwrap();
+        let nodemanage = cfg.nodemanage.unwrap();
+
+        assert_eq!(nodemanage.install_root, "/opt/rsagent");
+        assert_eq!(
+            nodemanage.register_callback_url,
+            "http://127.0.0.1:3000/api/nodes/agent/register"
+        );
+        assert!(nodemanage.install_plugins.is_empty());
+        assert_eq!(nodemanage.register_wait_timeout_secs, 30);
     }
 }
