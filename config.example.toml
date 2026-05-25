@@ -79,3 +79,45 @@ database = "rsde"
 max_connections = 10
 min_connections = 1
 connect_timeout_secs = 10
+
+# ============================================================================
+# NodeManage 节点管理配置
+# ============================================================================
+# 启用后 apiserver 会挂载 /api/nodes 路由。
+# 当前模块提供节点 CRUD、心跳、rsagent 注册边界，以及在线安装 rsagent 的入口。
+[nodemanage]
+# 节点管理相关表名前缀，后续接入 MySQL 持久化时使用。
+table_prefix = "node_"
+# 在线添加节点时，nodemanage 通过 SSH 到目标机器安装的 rsagent 包地址。
+# 也可以在 POST /api/nodes/install 请求体中覆盖该地址。
+rsagent_package_url = "https://example.com/rsagent.tar.gz"
+# rsagent 默认安装根目录。
+install_root = "/opt/rsagent"
+# 远端 rsagent 安装完成后回调注册的地址。
+register_callback_url = "http://127.0.0.1:3000/api/nodes/agent/register"
+# 等待 rsagent 完成注册的超时时间，单位秒。
+register_wait_timeout_secs = 30
+# SSH 连接超时时间，单位秒。
+ssh_connect_timeout_secs = 10
+
+[[nodemanage.install_plugins]]
+name = "metrics"
+version = "1.0.0"
+package_url = "https://example.com/plugins/metrics.tar.gz"
+
+[[nodemanage.install_plugins]]
+name = "shell"
+version = "1.0.0"
+package_url = "https://example.com/plugins/shell.tar.gz"
+
+# 可选：NodeManage 独立 MySQL 配置。
+# 如果不配置，当前实现使用内存仓储；后续接入持久化时会复用该配置。
+[nodemanage.mysql]
+host = "127.0.0.1"
+port = 3306
+user = "root"
+password = "your_mysql_password_here"
+database = "rsde"
+max_connections = 10
+min_connections = 1
+connect_timeout_secs = 10

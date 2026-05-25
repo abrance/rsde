@@ -8,6 +8,7 @@ members = [
     "anybox",
     "prompt",
     "datalink-engine",
+    "nodemanage",
 ]
 resolver = "2"
 
