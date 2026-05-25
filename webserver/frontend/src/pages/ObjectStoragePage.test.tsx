@@ -110,6 +110,36 @@ describe('ObjectStoragePage', () => {
         expect(screen.getByText('42 B')).toBeInTheDocument()
     })
 
+    it('does not crash when object timestamps are invalid', async () => {
+        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+        mockFetchWith({
+            success: true,
+            data: {
+                current_prefix: '',
+                marker: null,
+                has_more: false,
+                prefixes: [],
+                items: [
+                    {
+                        key: '1008.png',
+                        name: '1008.png',
+                        is_directory: false,
+                        size: 17196,
+                        mime_type: 'image/png',
+                        updated_at: '17440973018030518',
+                        hash: 'hash-1008',
+                    },
+                ],
+            },
+        })
+
+        render(<ObjectStoragePage />)
+
+        expect(await screen.findByText('1008.png')).toBeInTheDocument()
+        expect(screen.getByText('-')).toBeInTheDocument()
+        expect(consoleError).not.toHaveBeenCalled()
+    })
+
     it('navigates into a directory and updates breadcrumbs', async () => {
         const fetchMock = vi
             .fn()
