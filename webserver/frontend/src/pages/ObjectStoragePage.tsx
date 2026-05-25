@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './ObjectStoragePage.css'
 
 type ApiEnvelope<T> = {
@@ -39,6 +39,12 @@ type ObjectDetailData = ObjectStorageItem & {
 type BatchDeleteResult = {
     deleted_keys: string[]
     failed: Array<{ key: string; error: string }>
+}
+
+type CreateUploadTokenData = {
+    upload_token: string
+    object_key: string
+    upload_url: string
 }
 
 const rootListData: ObjectListData = {
@@ -106,6 +112,7 @@ function buildBreadcrumbs(prefix: string): Array<{ name: string; prefix: string 
 export default function ObjectStoragePage() {
     const listRequestIdRef = useRef(0)
     const detailRequestIdRef = useRef(0)
+    const fileInputRef = useRef<HTMLInputElement | null>(null)
     const [currentPrefix, setCurrentPrefix] = useState('')
     const [listData, setListData] = useState<ObjectListData>(rootListData)
     const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set())
@@ -251,6 +258,79 @@ export default function ObjectStoragePage() {
         })
     }
 
+    const createDirectory = async () => {
+        const name = window.prompt('请输入目录名称')?.trim()
+        if (!name) {
+            return
+        }
+
+        setError('')
+        setOperationMessage('')
+
+        try {
+            const requestBody = currentPrefix ? { prefix: currentPrefix, name } : { name }
+            const result = await requestJson<ObjectStoragePrefix>('/api/object-storage/directories', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody),
+            })
+            setOperationMessage(`已创建目录 ${result.key}`)
+            await refreshCurrentDirectory()
+        } catch (requestError) {
+            const message = requestError instanceof Error ? requestError.message : '创建目录失败'
+            setError(message)
+        }
+    }
+
+    const selectUploadFile = () => {
+        fileInputRef.current?.click()
+    }
+
+    const uploadFile = async (file: File) => {
+        setError('')
+        setOperationMessage('')
+
+        try {
+            const requestBody = currentPrefix
+                ? { prefix: currentPrefix, filename: file.name }
+                : { filename: file.name }
+            const uploadData = await requestJson<CreateUploadTokenData>('/api/object-storage/upload-token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody),
+            })
+
+            const formData = new FormData()
+            formData.append('token', uploadData.upload_token)
+            formData.append('key', uploadData.object_key)
+            formData.append('file', file)
+
+            const uploadResponse = await fetch(uploadData.upload_url, {
+                method: 'POST',
+                body: formData,
+            })
+            if (!uploadResponse.ok) {
+                throw new Error(`上传失败：${uploadResponse.status}`)
+            }
+
+            setOperationMessage(`已上传 ${uploadData.object_key}`)
+            await refreshCurrentDirectory()
+        } catch (requestError) {
+            const message = requestError instanceof Error ? requestError.message : '上传文件失败'
+            setError(message)
+        }
+    }
+
+    const handleUploadFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0]
+        event.target.value = ''
+        if (!file) {
+            return
+        }
+
+        await uploadFile(file)
+    }
+
     return (
         <div className="object-storage-page">
             <section className="object-storage-hero">
@@ -301,10 +381,25 @@ export default function ObjectStoragePage() {
                     >
                         刷新
                     </button>
-                    <button className="object-storage-button secondary" type="button">
+                    <button
+                        className="object-storage-button secondary"
+                        type="button"
+                        onClick={selectUploadFile}
+                    >
                         上传文件
                     </button>
-                    <button className="object-storage-button secondary" type="button">
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        aria-label="选择上传文件"
+                        className="object-storage-file-input"
+                        onChange={(event) => void handleUploadFileChange(event)}
+                    />
+                    <button
+                        className="object-storage-button secondary"
+                        type="button"
+                        onClick={() => void createDirectory()}
+                    >
                         新建目录
                     </button>
                     <button

@@ -169,6 +169,80 @@ describe('ObjectStoragePage', () => {
         expect(screen.getByText('images')).toBeInTheDocument()
     })
 
+    it('creates a directory and refreshes the current listing', async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(jsonResponse(emptyListResponse))
+            .mockResolvedValueOnce(
+                jsonResponse({
+                    success: true,
+                    data: { key: 'reports/', name: 'reports', is_directory: true },
+                }),
+            )
+            .mockResolvedValueOnce(jsonResponse(emptyListResponse))
+        vi.stubGlobal('fetch', fetchMock)
+        vi.stubGlobal('prompt', vi.fn(() => 'reports'))
+
+        render(<ObjectStoragePage />)
+
+        fireEvent.click(await screen.findByRole('button', { name: '新建目录' }))
+
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledWith('/api/object-storage/directories', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: 'reports' }),
+            })
+        })
+        expect(await screen.findByText('已创建目录 reports/')).toBeInTheDocument()
+        expect(fetchMock).toHaveBeenLastCalledWith('/api/object-storage/objects')
+    })
+
+    it('uploads a selected file with an upload token and refreshes the listing', async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(jsonResponse(emptyListResponse))
+            .mockResolvedValueOnce(
+                jsonResponse({
+                    success: true,
+                    data: {
+                        upload_token: 'upload-token',
+                        object_key: 'demo.txt',
+                        upload_url: 'https://upload.example.com',
+                        expires_at: '2026-05-25T00:00:00Z',
+                        bucket: 'test-bucket',
+                    },
+                }),
+            )
+            .mockResolvedValueOnce(new Response(JSON.stringify({ key: 'demo.txt', hash: 'hash-demo' })))
+            .mockResolvedValueOnce(jsonResponse(emptyListResponse))
+        vi.stubGlobal('fetch', fetchMock)
+
+        render(<ObjectStoragePage />)
+
+        const file = new File(['hello'], 'demo.txt', { type: 'text/plain' })
+        fireEvent.change(await screen.findByLabelText('选择上传文件'), {
+            target: { files: [file] },
+        })
+
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledWith('/api/object-storage/upload-token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filename: 'demo.txt' }),
+            })
+        })
+
+        const uploadCall = fetchMock.mock.calls.find(([url]) => url === 'https://upload.example.com')
+        expect(uploadCall).toBeDefined()
+        const uploadBody = uploadCall?.[1]?.body as FormData
+        expect(uploadBody.get('token')).toBe('upload-token')
+        expect(uploadBody.get('key')).toBe('demo.txt')
+        expect(uploadBody.get('file')).toBe(file)
+        expect(await screen.findByText('已上传 demo.txt')).toBeInTheDocument()
+        expect(fetchMock).toHaveBeenLastCalledWith('/api/object-storage/objects')
+    })
+
     it('opens object detail panel', async () => {
         const fetchMock = vi
             .fn()
