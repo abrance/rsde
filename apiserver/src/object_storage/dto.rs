@@ -147,6 +147,7 @@ pub struct CreateUploadTokenRequest {
 pub struct CreateUploadTokenResponse {
     pub upload_token: String,
     pub object_key: String,
+    pub upload_key: String,
     pub upload_url: String,
     pub expires_at: String,
     pub bucket: String,
