@@ -61,3 +61,5 @@ http-body-util = "0.1"
 mysql_async = { version = "0.36", default-features = false, features = ["minimal", "chrono"] }
 russh = "0.60.2"
 russh-sftp = "2.1.2"
+sea-orm = { version = "1.1", features = ["sqlx-mysql", "runtime-tokio-rustls", "macros"] }
+sqlx = { version = "0.8", features = ["mysql", "runtime-tokio-rustls"] }
