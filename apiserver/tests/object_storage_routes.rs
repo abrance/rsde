@@ -147,6 +147,41 @@ async fn object_storage_detail_returns_success_envelope() {
     assert_eq!(body["data"]["key"], "images/demo.png");
     assert_eq!(body["data"]["name"], "demo.png");
     assert_eq!(body["data"]["is_directory"], false);
+    assert_eq!(
+        body["data"]["download_url"],
+        "https://test.example.com/images/demo.png"
+    );
+    assert_eq!(body.get("error"), None);
+    assert_eq!(body.get("code"), None);
+}
+
+#[tokio::test]
+async fn object_storage_detail_private_download_url_is_signed() {
+    let base_url = spawn_object_storage_app_with_config(private_bucket_config()).await;
+
+    let response = reqwest::Client::new()
+        .get(format!("{}/objects/detail?key=images/demo.png", base_url))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["success"], true);
+    assert_eq!(body["data"]["key"], "images/demo.png");
+    assert!(
+        body["data"]["download_url"]
+            .as_str()
+            .unwrap()
+            .contains("?e=")
+    );
+    assert!(
+        body["data"]["download_url"]
+            .as_str()
+            .unwrap()
+            .contains("token=")
+    );
     assert_eq!(body.get("error"), None);
     assert_eq!(body.get("code"), None);
 }
