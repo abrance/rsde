@@ -436,6 +436,34 @@ export default function ObjectStoragePage() {
         await uploadFile(file)
     }
 
+    const renderDetailDownloadUrl = () => {
+        const safeUrl = detailItem?.download_url ? normalizeDownloadUrl(detailItem.download_url) : null
+
+        if (!safeUrl) {
+            return '未配置公开访问域名'
+        }
+
+        return (
+            <div className="object-storage-detail-download">
+                <a
+                    href={safeUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="object-storage-detail-download-link"
+                >
+                    {safeUrl}
+                </a>
+                <button
+                    className="object-storage-button secondary object-storage-detail-copy"
+                    type="button"
+                    onClick={() => copyDownloadUrl(safeUrl)}
+                >
+                    复制链接
+                </button>
+            </div>
+        )
+    }
+
     return (
         <div className="object-storage-page">
             <section className="object-storage-hero">
@@ -713,7 +741,9 @@ export default function ObjectStoragePage() {
                         </div>
                         <div>
                             <dt>下载地址</dt>
-                            <dd>{detailItem.download_url || '未配置公开访问域名'}</dd>
+                            <dd>
+                                {renderDetailDownloadUrl()}
+                            </dd>
                         </div>
                     </dl>
                 </aside>

@@ -648,6 +648,111 @@ describe('ObjectStoragePage', () => {
         expect(screen.getByText('hash-demo')).toBeInTheDocument()
     })
 
+    it('renders safe download url in object detail as a clickable link and allows copying', async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(jsonResponse(populatedListResponse))
+            .mockResolvedValueOnce(
+                jsonResponse({
+                    success: true,
+                    data: {
+                        key: 'demo.png',
+                        name: 'demo.png',
+                        is_directory: false,
+                        size: 42,
+                        hash: 'hash-demo',
+                        mime_type: 'image/png',
+                        updated_at: '2026-05-22T00:00:00Z',
+                        download_url: 'https://cdn.example.com/demo.png',
+                        storage_class: '0',
+                    },
+                }),
+            )
+        vi.stubGlobal('fetch', fetchMock)
+        const writeText = vi.fn().mockResolvedValue(undefined)
+        Object.assign(navigator, { clipboard: { writeText } })
+
+        render(<ObjectStoragePage />)
+
+        fireEvent.click(await screen.findByRole('button', { name: '查看 demo.png 详情' }))
+
+        const detailPanel = await screen.findByRole('complementary', { name: '对象详情面板' })
+        const link = within(detailPanel).getByRole('link', { name: 'https://cdn.example.com/demo.png' })
+        expect(link).toHaveAttribute('href', 'https://cdn.example.com/demo.png')
+        expect(link).toHaveAttribute('target', '_blank')
+        expect(link).toHaveAttribute('rel', 'noreferrer')
+
+        const copyButton = within(detailPanel).getByRole('button', { name: '复制链接' })
+        fireEvent.click(copyButton)
+
+        expect(writeText).toHaveBeenCalledWith('https://cdn.example.com/demo.png')
+        expect(await screen.findByText('下载链接已复制')).toBeInTheDocument()
+    })
+
+    it('renders missing download url in object detail as fallback text', async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(jsonResponse(populatedListResponse))
+            .mockResolvedValueOnce(
+                jsonResponse({
+                    success: true,
+                    data: {
+                        key: 'demo.png',
+                        name: 'demo.png',
+                        is_directory: false,
+                        size: 42,
+                        hash: 'hash-demo',
+                        mime_type: 'image/png',
+                        updated_at: '2026-05-22T00:00:00Z',
+                        download_url: null,
+                        storage_class: '0',
+                    },
+                }),
+            )
+        vi.stubGlobal('fetch', fetchMock)
+
+        render(<ObjectStoragePage />)
+
+        fireEvent.click(await screen.findByRole('button', { name: '查看 demo.png 详情' }))
+
+        const detailPanel = await screen.findByRole('complementary', { name: '对象详情面板' })
+        expect(within(detailPanel).getByText('未配置公开访问域名')).toBeInTheDocument()
+        expect(within(detailPanel).queryByRole('link')).not.toBeInTheDocument()
+        expect(within(detailPanel).queryByRole('button', { name: '复制链接' })).not.toBeInTheDocument()
+    })
+
+    it('renders unsafe download url in object detail as fallback text', async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(jsonResponse(populatedListResponse))
+            .mockResolvedValueOnce(
+                jsonResponse({
+                    success: true,
+                    data: {
+                        key: 'demo.png',
+                        name: 'demo.png',
+                        is_directory: false,
+                        size: 42,
+                        hash: 'hash-demo',
+                        mime_type: 'image/png',
+                        updated_at: '2026-05-22T00:00:00Z',
+                        download_url: 'javascript:alert(1)',
+                        storage_class: '0',
+                    },
+                }),
+            )
+        vi.stubGlobal('fetch', fetchMock)
+
+        render(<ObjectStoragePage />)
+
+        fireEvent.click(await screen.findByRole('button', { name: '查看 demo.png 详情' }))
+
+        const detailPanel = await screen.findByRole('complementary', { name: '对象详情面板' })
+        expect(within(detailPanel).getByText('未配置公开访问域名')).toBeInTheDocument()
+        expect(within(detailPanel).queryByRole('link')).not.toBeInTheDocument()
+        expect(within(detailPanel).queryByRole('button', { name: '复制链接' })).not.toBeInTheDocument()
+    })
+
     it('clears stale object detail when the next detail request fails', async () => {
         const fetchMock = vi
             .fn()
