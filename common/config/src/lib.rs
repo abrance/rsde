@@ -311,4 +311,53 @@ mod tests {
         assert!(nodemanage.install_plugins.is_empty());
         assert_eq!(nodemanage.register_wait_timeout_secs, 30);
     }
+
+    #[test]
+    fn image_hosting_config_can_be_deserialized() {
+        let raw = r#"
+            [image_hosting]
+            storage_dir = "/tmp/uploads"
+            cleanup_interval_secs = 600
+            file_expire_secs = 1800
+        "#;
+
+        let cfg: GlobalConfig = toml::from_str(raw).unwrap();
+        let hosting = cfg.image_hosting.expect("image_hosting should exist");
+        assert_eq!(hosting.storage_dir, "/tmp/uploads");
+        assert_eq!(hosting.cleanup_interval_secs, 600);
+        assert_eq!(hosting.file_expire_secs, 1800);
+    }
+
+    #[test]
+    fn image_hosting_config_uses_defaults_for_optional_fields() {
+        let raw = r#"
+            [image_hosting]
+            storage_dir = "/tmp/uploads"
+        "#;
+
+        let cfg: GlobalConfig = toml::from_str(raw).unwrap();
+        let hosting = cfg.image_hosting.unwrap();
+        assert_eq!(hosting.storage_dir, "/tmp/uploads");
+        assert_eq!(hosting.cleanup_interval_secs, 3600);
+        assert_eq!(hosting.file_expire_secs, 3600);
+    }
+
+    #[test]
+    fn image_hosting_config_allows_missing_section() {
+        let raw = r#"
+            [apiserver]
+            listen_address = "0.0.0.0:3000"
+        "#;
+
+        let cfg: GlobalConfig = toml::from_str(raw).unwrap();
+        assert!(cfg.image_hosting.is_none());
+    }
+
+    #[test]
+    fn image_hosting_config_default_impl_matches_field_defaults() {
+        let hosting = image_host::ImageHostingConfig::default();
+        assert_eq!(hosting.storage_dir, "");
+        assert_eq!(hosting.cleanup_interval_secs, 3600);
+        assert_eq!(hosting.file_expire_secs, 3600);
+    }
 }

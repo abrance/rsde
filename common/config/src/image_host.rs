@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ImageHostingConfig {
     /// image file storage directory
     pub storage_dir: String,
@@ -20,4 +20,14 @@ fn default_cleanup_interval() -> u64 {
 
 fn default_file_expire() -> u64 {
     3600 // 1 小时
+}
+
+impl Default for ImageHostingConfig {
+    fn default() -> Self {
+        Self {
+            storage_dir: String::new(),
+            cleanup_interval_secs: default_cleanup_interval(),
+            file_expire_secs: default_file_expire(),
+        }
+    }
 }
