@@ -244,6 +244,380 @@ describe('ObjectStoragePage', () => {
         expect(fetchMock).toHaveBeenLastCalledWith('/api/object-storage/objects')
     })
 
+    it('requests the download url with the full object_key after upload succeeds', async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(jsonResponse(emptyListResponse))
+            .mockResolvedValueOnce(
+                jsonResponse({
+                    success: true,
+                    data: {
+                        upload_token: 'upload-token',
+                        object_key: 'images/demo.txt',
+                        upload_key: 'team-a/images/demo.txt',
+                        upload_url: 'https://upload.example.com',
+                        expires_at: '2026-05-27T12:00:00Z',
+                        bucket: 'test-bucket',
+                    },
+                }),
+            )
+            .mockResolvedValueOnce(new Response(JSON.stringify({ key: 'images/demo.txt', hash: 'hash-demo' })))
+            .mockResolvedValueOnce(jsonResponse(emptyListResponse))
+        vi.stubGlobal('fetch', fetchMock)
+
+        render(<ObjectStoragePage />)
+
+        const file = new File(['hello'], 'demo.txt', { type: 'text/plain' })
+        fireEvent.change(await screen.findByLabelText('选择上传文件'), {
+            target: { files: [file] },
+        })
+
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledWith(
+                '/api/object-storage/download-url?key=images%2Fdemo.txt',
+            )
+        })
+    })
+
+    it('does not restore a cleared upload result when refresh happens during link lookup', async () => {
+        const downloadUrlRequest = deferredResponse()
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(jsonResponse(emptyListResponse))
+            .mockResolvedValueOnce(
+                jsonResponse({
+                    success: true,
+                    data: {
+                        upload_token: 'upload-token',
+                        object_key: 'demo.txt',
+                        upload_key: 'team-a/demo.txt',
+                        upload_url: 'https://upload.example.com',
+                        expires_at: '2026-05-27T12:00:00Z',
+                        bucket: 'test-bucket',
+                    },
+                }),
+            )
+            .mockResolvedValueOnce(new Response(JSON.stringify({ key: 'demo.txt', hash: 'hash-demo' })))
+            .mockReturnValueOnce(downloadUrlRequest.promise)
+            .mockResolvedValueOnce(jsonResponse(emptyListResponse))
+            .mockImplementation(() => Promise.reject(new Error('unexpected fetch')))
+        vi.stubGlobal('fetch', fetchMock)
+
+        render(<ObjectStoragePage />)
+
+        const file = new File(['hello'], 'demo.txt', { type: 'text/plain' })
+        fireEvent.change(await screen.findByLabelText('选择上传文件'), {
+            target: { files: [file] },
+        })
+
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledWith('/api/object-storage/download-url?key=demo.txt')
+        })
+
+        fireEvent.click(screen.getByRole('button', { name: '刷新' }))
+
+        downloadUrlRequest.resolve(
+            jsonResponse({
+                success: true,
+                data: {
+                    key: 'demo.txt',
+                    download_url: 'https://cdn.example.com/demo.txt',
+                    expires_at: null,
+                },
+            }),
+        )
+
+        await waitFor(() => {
+            expect(fetchMock).toHaveBeenCalledTimes(5)
+        })
+        expect(screen.queryByRole('region', { name: '最近上传结果' })).not.toBeInTheDocument()
+    })
+
+    it('keeps upload success visible when download url lookup fails', async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(jsonResponse(emptyListResponse))
+            .mockResolvedValueOnce(
+                jsonResponse({
+                    success: true,
+                    data: {
+                        upload_token: 'upload-token',
+                        object_key: 'images/demo.txt',
+                        upload_key: 'team-a/images/demo.txt',
+                        upload_url: 'https://upload.example.com',
+                        expires_at: '2026-05-27T12:00:00Z',
+                        bucket: 'test-bucket',
+                    },
+                }),
+            )
+            .mockResolvedValueOnce(new Response(JSON.stringify({ key: 'images/demo.txt', hash: 'hash-demo' })))
+            .mockResolvedValueOnce(jsonResponse({ success: false, error: 'download lookup failed' }))
+            .mockResolvedValueOnce(jsonResponse(emptyListResponse))
+        vi.stubGlobal('fetch', fetchMock)
+
+        render(<ObjectStoragePage />)
+
+        const file = new File(['hello'], 'demo.txt', { type: 'text/plain' })
+        fireEvent.change(await screen.findByLabelText('选择上传文件'), {
+            target: { files: [file] },
+        })
+
+        expect(await screen.findByText('已上传 images/demo.txt')).toBeInTheDocument()
+        expect(screen.getByText('下载链接获取失败：download lookup failed')).toBeInTheDocument()
+    })
+
+    it('renders a dedicated recent upload result section with link and expiry', async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(jsonResponse(emptyListResponse))
+            .mockResolvedValueOnce(
+                jsonResponse({
+                    success: true,
+                    data: {
+                        upload_token: 'upload-token',
+                        object_key: 'reports/demo.txt',
+                        upload_key: 'team-a/reports/demo.txt',
+                        upload_url: 'https://upload.example.com',
+                        expires_at: '2026-05-27T12:00:00Z',
+                        bucket: 'test-bucket',
+                    },
+                }),
+            )
+            .mockResolvedValueOnce(new Response(JSON.stringify({ key: 'reports/demo.txt', hash: 'hash-demo' })))
+            .mockResolvedValueOnce(
+                jsonResponse({
+                    success: true,
+                    data: {
+                        key: 'reports/demo.txt',
+                        download_url: 'https://cdn.example.com/reports/demo.txt',
+                        expires_at: '2026-05-27T13:00:00Z',
+                    },
+                }),
+            )
+            .mockResolvedValueOnce(jsonResponse(emptyListResponse))
+        vi.stubGlobal('fetch', fetchMock)
+
+        render(<ObjectStoragePage />)
+
+        const file = new File(['hello'], 'demo.txt', { type: 'text/plain' })
+        fireEvent.change(await screen.findByLabelText('选择上传文件'), {
+            target: { files: [file] },
+        })
+
+        expect(await screen.findByRole('region', { name: '最近上传结果' })).toBeInTheDocument()
+        expect(screen.getByText('已上传 reports/demo.txt')).toBeInTheDocument()
+        expect(screen.getByText('https://cdn.example.com/reports/demo.txt')).toBeInTheDocument()
+        expect(screen.getByText(/链接有效期至/)).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: '复制链接' })).toBeInTheDocument()
+        expect(screen.getByRole('link', { name: '打开链接' })).toHaveAttribute(
+            'href',
+            'https://cdn.example.com/reports/demo.txt',
+        )
+    })
+
+    it('treats an unsafe download url as unavailable instead of rendering a link', async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(jsonResponse(emptyListResponse))
+            .mockResolvedValueOnce(
+                jsonResponse({
+                    success: true,
+                    data: {
+                        upload_token: 'upload-token',
+                        object_key: 'reports/demo.txt',
+                        upload_key: 'team-a/reports/demo.txt',
+                        upload_url: 'https://upload.example.com',
+                        expires_at: '2026-05-27T12:00:00Z',
+                        bucket: 'test-bucket',
+                    },
+                }),
+            )
+            .mockResolvedValueOnce(new Response(JSON.stringify({ key: 'reports/demo.txt', hash: 'hash-demo' })))
+            .mockResolvedValueOnce(
+                jsonResponse({
+                    success: true,
+                    data: {
+                        key: 'reports/demo.txt',
+                        download_url: 'javascript:alert(1)',
+                        expires_at: null,
+                    },
+                }),
+            )
+            .mockResolvedValueOnce(jsonResponse(emptyListResponse))
+        vi.stubGlobal('fetch', fetchMock)
+
+        render(<ObjectStoragePage />)
+
+        const file = new File(['hello'], 'demo.txt', { type: 'text/plain' })
+        fireEvent.change(await screen.findByLabelText('选择上传文件'), {
+            target: { files: [file] },
+        })
+
+        expect(await screen.findByText('已上传 reports/demo.txt')).toBeInTheDocument()
+        expect(screen.getByText('下载链接不可用：返回了不安全的链接')).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: '复制链接' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('link', { name: '打开链接' })).not.toBeInTheDocument()
+    })
+
+    it('clears the recent upload result when the user manually refreshes', async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(jsonResponse(emptyListResponse))
+            .mockResolvedValueOnce(
+                jsonResponse({
+                    success: true,
+                    data: {
+                        upload_token: 'upload-token',
+                        object_key: 'images/demo.txt',
+                        upload_key: 'team-a/images/demo.txt',
+                        upload_url: 'https://upload.example.com',
+                        expires_at: '2026-05-27T12:00:00Z',
+                        bucket: 'test-bucket',
+                    },
+                }),
+            )
+            .mockResolvedValueOnce(new Response(JSON.stringify({ key: 'images/demo.txt', hash: 'hash-demo' })))
+            .mockResolvedValueOnce(
+                jsonResponse({
+                    success: true,
+                    data: {
+                        key: 'images/demo.txt',
+                        download_url: 'https://cdn.example.com/images/demo.txt',
+                        expires_at: null,
+                    },
+                }),
+            )
+            .mockResolvedValueOnce(jsonResponse(emptyListResponse))
+            .mockResolvedValueOnce(jsonResponse(emptyListResponse))
+        vi.stubGlobal('fetch', fetchMock)
+
+        render(<ObjectStoragePage />)
+
+        const file = new File(['hello'], 'demo.txt', { type: 'text/plain' })
+        fireEvent.change(await screen.findByLabelText('选择上传文件'), {
+            target: { files: [file] },
+        })
+
+        expect(await screen.findByRole('region', { name: '最近上传结果' })).toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole('button', { name: '刷新' }))
+
+        await waitFor(() => {
+            expect(screen.queryByRole('region', { name: '最近上传结果' })).not.toBeInTheDocument()
+        })
+    })
+
+    it('clears the recent upload result when navigating to another directory', async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(populatedListResponse ? jsonResponse(populatedListResponse) : jsonResponse(emptyListResponse))
+            .mockResolvedValueOnce(
+                jsonResponse({
+                    success: true,
+                    data: {
+                        upload_token: 'upload-token',
+                        object_key: 'images/demo.txt',
+                        upload_key: 'team-a/images/demo.txt',
+                        upload_url: 'https://upload.example.com',
+                        expires_at: '2026-05-27T12:00:00Z',
+                        bucket: 'test-bucket',
+                    },
+                }),
+            )
+            .mockResolvedValueOnce(new Response(JSON.stringify({ key: 'images/demo.txt', hash: 'hash-demo' })))
+            .mockResolvedValueOnce(
+                jsonResponse({
+                    success: true,
+                    data: {
+                        key: 'images/demo.txt',
+                        download_url: 'https://cdn.example.com/images/demo.txt',
+                        expires_at: null,
+                    },
+                }),
+            )
+            .mockResolvedValueOnce(jsonResponse(populatedListResponse))
+            .mockResolvedValueOnce(
+                jsonResponse({
+                    success: true,
+                    data: {
+                        current_prefix: 'images/',
+                        marker: null,
+                        has_more: false,
+                        prefixes: [],
+                        items: [],
+                    },
+                }),
+            )
+        vi.stubGlobal('fetch', fetchMock)
+
+        render(<ObjectStoragePage />)
+
+        const file = new File(['hello'], 'demo.txt', { type: 'text/plain' })
+        fireEvent.change(await screen.findByLabelText('选择上传文件'), {
+            target: { files: [file] },
+        })
+
+        expect(await screen.findByRole('region', { name: '最近上传结果' })).toBeInTheDocument()
+
+        fireEvent.click(await screen.findByRole('button', { name: '进入 images 目录' }))
+
+        await waitFor(() => {
+            expect(screen.queryByRole('region', { name: '最近上传结果' })).not.toBeInTheDocument()
+        })
+    })
+
+    it('falls back to a manual-copy prompt when clipboard copy fails', async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(jsonResponse(emptyListResponse))
+            .mockResolvedValueOnce(
+                jsonResponse({
+                    success: true,
+                    data: {
+                        upload_token: 'upload-token',
+                        object_key: 'images/demo.txt',
+                        upload_key: 'team-a/images/demo.txt',
+                        upload_url: 'https://upload.example.com',
+                        expires_at: '2026-05-27T12:00:00Z',
+                        bucket: 'test-bucket',
+                    },
+                }),
+            )
+            .mockResolvedValueOnce(new Response(JSON.stringify({ key: 'images/demo.txt', hash: 'hash-demo' })))
+            .mockResolvedValueOnce(
+                jsonResponse({
+                    success: true,
+                    data: {
+                        key: 'images/demo.txt',
+                        download_url: 'https://cdn.example.com/images/demo.txt',
+                        expires_at: null,
+                    },
+                }),
+            )
+            .mockResolvedValueOnce(jsonResponse(emptyListResponse))
+        vi.stubGlobal('fetch', fetchMock)
+
+        const writeText = vi.fn().mockRejectedValue(new Error('clipboard unavailable'))
+        Object.assign(navigator, { clipboard: { writeText } })
+        vi.stubGlobal('prompt', vi.fn(() => null))
+
+        render(<ObjectStoragePage />)
+
+        const file = new File(['hello'], 'demo.txt', { type: 'text/plain' })
+        fireEvent.change(await screen.findByLabelText('选择上传文件'), {
+            target: { files: [file] },
+        })
+
+        fireEvent.click(await screen.findByRole('button', { name: '复制链接' }))
+
+        await waitFor(() => {
+            expect(window.prompt).toHaveBeenCalledWith(
+                '请手动复制下载链接',
+                'https://cdn.example.com/images/demo.txt',
+            )
+        })
+    })
+
     it('opens object detail panel', async () => {
         const fetchMock = vi
             .fn()

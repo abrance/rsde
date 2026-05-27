@@ -48,6 +48,19 @@ type CreateUploadTokenData = {
     upload_url: string
 }
 
+type DownloadUrlData = {
+    key: string
+    download_url: string
+    expires_at?: string | null
+}
+
+type RecentUploadResult = {
+    key: string
+    downloadUrl?: string
+    expiresAt?: string | null
+    linkError?: string | null
+}
+
 const rootListData: ObjectListData = {
     current_prefix: '',
     marker: null,
@@ -110,9 +123,31 @@ function buildBreadcrumbs(prefix: string): Array<{ name: string; prefix: string 
     }))
 }
 
+function normalizeDownloadUrl(value?: string | null): string | null {
+    if (!value) {
+        return null
+    }
+
+    try {
+        const parsed = new URL(value)
+        const isLocalHttp =
+            parsed.protocol === 'http:' &&
+            (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]')
+
+        if (parsed.protocol === 'https:' || isLocalHttp) {
+            return parsed.toString()
+        }
+
+        return null
+    } catch {
+        return null
+    }
+}
+
 export default function ObjectStoragePage() {
     const listRequestIdRef = useRef(0)
     const detailRequestIdRef = useRef(0)
+    const uploadRequestIdRef = useRef(0)
     const fileInputRef = useRef<HTMLInputElement | null>(null)
     const [currentPrefix, setCurrentPrefix] = useState('')
     const [listData, setListData] = useState<ObjectListData>(rootListData)
@@ -121,6 +156,7 @@ export default function ObjectStoragePage() {
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState('')
     const [operationMessage, setOperationMessage] = useState('')
+    const [recentUploadResult, setRecentUploadResult] = useState<RecentUploadResult | null>(null)
 
     const breadcrumbs = useMemo(() => buildBreadcrumbs(currentPrefix), [currentPrefix])
     const hasObjects = listData.prefixes.length > 0 || listData.items.length > 0
@@ -165,6 +201,37 @@ export default function ObjectStoragePage() {
         setDetailItem(null)
         setOperationMessage('')
         await loadObjects(prefix)
+    }
+
+    const clearRecentUploadResult = () => {
+        uploadRequestIdRef.current += 1
+        setRecentUploadResult(null)
+    }
+
+    const handleRefresh = () => {
+        clearRecentUploadResult()
+        void refreshCurrentDirectory()
+    }
+
+    const handleOpenDirectory = (prefix: string) => {
+        clearRecentUploadResult()
+        void openDirectory(prefix)
+    }
+
+    const copyDownloadUrl = (url: string) => {
+        if (!navigator.clipboard?.writeText) {
+            window.prompt('请手动复制下载链接', url)
+            return
+        }
+
+        navigator.clipboard.writeText(url).then(
+            () => {
+                setOperationMessage('下载链接已复制')
+            },
+            () => {
+                window.prompt('请手动复制下载链接', url)
+            },
+        )
     }
 
     const openDetail = async (key: string) => {
@@ -288,8 +355,13 @@ export default function ObjectStoragePage() {
     }
 
     const uploadFile = async (file: File) => {
+        const uploadRequestId = uploadRequestIdRef.current + 1
+        uploadRequestIdRef.current = uploadRequestId
+        const uploadPrefix = currentPrefix
+
         setError('')
         setOperationMessage('')
+        setRecentUploadResult(null)
 
         try {
             const requestBody = currentPrefix
@@ -315,7 +387,39 @@ export default function ObjectStoragePage() {
             }
 
             setOperationMessage(`已上传 ${uploadData.object_key}`)
-            await refreshCurrentDirectory()
+
+            try {
+                const downloadData = await requestJson<DownloadUrlData>(
+                    `/api/object-storage/download-url?key=${encodeURIComponent(uploadData.object_key)}`,
+                )
+                if (uploadRequestIdRef.current !== uploadRequestId) {
+                    return
+                }
+
+                const safeDownloadUrl = normalizeDownloadUrl(downloadData.download_url)
+                setRecentUploadResult({
+                    key: downloadData.key,
+                    downloadUrl: safeDownloadUrl ?? undefined,
+                    expiresAt: downloadData.expires_at ?? null,
+                    linkError: safeDownloadUrl ? null : '下载链接不可用：返回了不安全的链接',
+                })
+            } catch (downloadError) {
+                if (uploadRequestIdRef.current !== uploadRequestId) {
+                    return
+                }
+
+                const message = downloadError instanceof Error ? downloadError.message : '下载链接获取失败'
+                setRecentUploadResult({
+                    key: uploadData.object_key,
+                    downloadUrl: undefined,
+                    expiresAt: null,
+                    linkError: `下载链接获取失败：${message}`,
+                })
+            }
+
+            if (uploadRequestIdRef.current === uploadRequestId) {
+                await loadObjects(uploadPrefix)
+            }
         } catch (requestError) {
             const message = requestError instanceof Error ? requestError.message : '上传文件失败'
             setError(message)
@@ -356,7 +460,7 @@ export default function ObjectStoragePage() {
                     <button
                         className="object-storage-link-button"
                         type="button"
-                        onClick={() => void openDirectory('')}
+                        onClick={() => handleOpenDirectory('')}
                         aria-label="返回根目录"
                     >
                         根目录
@@ -367,7 +471,7 @@ export default function ObjectStoragePage() {
                             <button
                                 className="object-storage-link-button"
                                 type="button"
-                                onClick={() => void openDirectory(item.prefix)}
+                                onClick={() => handleOpenDirectory(item.prefix)}
                             >
                                 {item.name}
                             </button>
@@ -378,7 +482,7 @@ export default function ObjectStoragePage() {
                     <button
                         className="object-storage-button secondary"
                         type="button"
-                        onClick={() => void refreshCurrentDirectory()}
+                        onClick={handleRefresh}
                     >
                         刷新
                     </button>
@@ -416,6 +520,65 @@ export default function ObjectStoragePage() {
 
             {error && <div className="object-storage-alert error">{error}</div>}
             {operationMessage && <div className="object-storage-alert">{operationMessage}</div>}
+            {recentUploadResult && (
+                <section
+                    className="object-storage-upload-result-card"
+                    aria-labelledby="upload-result-title"
+                >
+                    <div className="object-storage-upload-result-header">
+                        <h2 id="upload-result-title">最近上传结果</h2>
+                    </div>
+
+                    <div className="object-storage-upload-result-body">
+                        <p className="object-storage-upload-result-key">
+                            <strong>文件：</strong> {recentUploadResult.key}
+                        </p>
+
+                        {recentUploadResult.linkError ? (
+                            <div className="object-storage-upload-result-warning" role="alert">
+                                {recentUploadResult.linkError}
+                            </div>
+                        ) : (
+                            <>
+                                <div className="object-storage-upload-result-link-group">
+                                    <p className="object-storage-upload-result-url">
+                                        {recentUploadResult.downloadUrl}
+                                    </p>
+                                    <div className="object-storage-upload-result-actions">
+                                        <button
+                                            className="object-storage-button secondary"
+                                            type="button"
+                                            onClick={() => {
+                                                if (recentUploadResult.downloadUrl) {
+                                                    copyDownloadUrl(recentUploadResult.downloadUrl)
+                                                }
+                                            }}
+                                            disabled={!recentUploadResult.downloadUrl}
+                                        >
+                                            复制链接
+                                        </button>
+                                        {recentUploadResult.downloadUrl && (
+                                            <a
+                                                href={recentUploadResult.downloadUrl}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="object-storage-button secondary"
+                                            >
+                                                打开链接
+                                            </a>
+                                        )}
+                                    </div>
+                                </div>
+                                {recentUploadResult.expiresAt && (
+                                    <p className="object-storage-upload-result-meta">
+                                        链接有效期至 {formatDate(recentUploadResult.expiresAt)}
+                                    </p>
+                                )}
+                            </>
+                        )}
+                    </div>
+                </section>
+            )}
 
             <section className="object-storage-table-card" aria-label="对象列表">
                 <div className="object-storage-table-header" aria-hidden="true">
@@ -465,7 +628,7 @@ export default function ObjectStoragePage() {
                                         <button
                                             className="object-storage-link-button"
                                             type="button"
-                                            onClick={() => void openDirectory(prefix.key)}
+                                            onClick={() => handleOpenDirectory(prefix.key)}
                                             aria-label={`进入 ${prefix.name} 目录`}
                                         >
                                             进入
