@@ -111,6 +111,7 @@ impl ObjectStorageService {
         let stored_key = self.resolve_object_key(key)?;
         let detail = self.backend.get_object_detail(&stored_key).await?;
         let visible_key = self.visible_key(&detail.key);
+        let download_url = self.try_create_download_url_for_stored_key(&detail.key)?;
 
         Ok(ObjectDetailResponse {
             name: object_name(&visible_key),
@@ -120,7 +121,7 @@ impl ObjectStorageService {
             hash: detail.hash,
             mime_type: detail.mime_type,
             updated_at: detail.updated_at,
-            download_url: None,
+            download_url,
             storage_class: detail.storage_class,
         })
     }
@@ -229,16 +230,7 @@ impl ObjectStorageService {
         ensure_valid_object_key(&normalized_key, "key")?;
 
         let stored_key = self.resolve_object_key(&normalized_key)?;
-        let public_url = self.public_download_url(&stored_key)?;
-        let (download_url, expires_at) = if self.config.bucket_is_private {
-            (
-                self.backend
-                    .create_private_download_url(&public_url, self.config.private_url_ttl_secs)?,
-                Some(expires_at(self.config.private_url_ttl_secs)),
-            )
-        } else {
-            (public_url, None)
-        };
+        let (download_url, expires_at) = self.create_download_url_parts(&stored_key)?;
 
         Ok(DownloadUrlResponse {
             key: self.visible_key(&stored_key),
@@ -317,6 +309,28 @@ impl ObjectStorageService {
             base_url.trim_end_matches('/'),
             percent_encode_path(stored_key)
         ))
+    }
+
+    fn create_download_url_parts(&self, stored_key: &str) -> Result<(String, Option<String>)> {
+        let public_url = self.public_download_url(stored_key)?;
+
+        if self.config.bucket_is_private {
+            Ok((
+                self.backend
+                    .create_private_download_url(&public_url, self.config.private_url_ttl_secs)?,
+                Some(expires_at(self.config.private_url_ttl_secs)),
+            ))
+        } else {
+            Ok((public_url, None))
+        }
+    }
+
+    fn try_create_download_url_for_stored_key(&self, stored_key: &str) -> Result<Option<String>> {
+        match self.create_download_url_parts(stored_key) {
+            Ok((download_url, _expires_at)) => Ok(Some(download_url)),
+            Err(ObjectStorageError::ConfigError(_)) => Ok(None),
+            Err(err) => Err(err),
+        }
     }
 
     fn to_visible_prefixes(
@@ -636,6 +650,36 @@ mod tests {
         assert_eq!(detail.size, Some(42));
         assert_eq!(detail.hash, Some("hash".to_string()));
         assert_eq!(detail.mime_type, Some("image/png".to_string()));
+        assert_eq!(
+            detail.download_url,
+            Some("https://example.com/team-a/images/demo.png".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn object_detail_signs_download_url_for_private_bucket() {
+        let service = ObjectStorageService::new(
+            config::object_storage::ObjectStorageConfig {
+                access_key: "ak".to_string(),
+                secret_key: "sk".to_string(),
+                bucket: "bucket".to_string(),
+                region: "z0".to_string(),
+                domain: Some("example.com".to_string()),
+                public_base_url: None,
+                upload_token_ttl_secs: 3600,
+                private_url_ttl_secs: 3600,
+                use_https: true,
+                path_prefix: Some("/team-a".to_string()),
+                bucket_is_private: true,
+            },
+            Arc::new(FakeBackend),
+        );
+
+        let detail = service.get_object_detail("images/demo.png").await.unwrap();
+        let download_url = detail.download_url.expect("download url");
+
+        assert!(download_url.contains("https://example.com/team-a/images/demo.png"));
+        assert!(download_url.contains("?e=1770000000&token=ak:signature"));
     }
 
     #[tokio::test]
