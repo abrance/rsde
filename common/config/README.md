@@ -10,8 +10,11 @@ common/config/
 │   ├── lib.rs              # 主模块，定义 GlobalConfig
 │   ├── ocr.rs              # OCR 相关配置
 │   ├── apiserver.rs        # API Server 配置
+│   ├── datalink_engine.rs  # DataLink Engine 配置
 │   ├── object_storage.rs   # 七牛云对象存储配置
 │   ├── nodemanage.rs       # NodeManage 节点管理配置
+│   ├── prompt.rs           # Prompt 服务配置
+│   ├── anybox.rs           # Anybox 服务配置
 │   └── rsync.rs            # Rsync 服务配置
 └── Cargo.toml
 ```
@@ -22,8 +25,9 @@ common/config/
 common/config (基础配置库，不依赖其他模块)
     ↑
     ├── pic_recog (使用 config::ocr::*)
-    ├── apiserver (使用 config::GlobalConfig, config::ocr::*)
+    ├── apiserver (使用 config::GlobalConfig 和各服务子配置)
     ├── nodemanage (通过 apiserver 读取 config::nodemanage::NodeManageConfig)
+    ├── datalink-engine (使用 config::datalink_engine::*)
     ├── rsync (使用 config::rsync::*)
     └── rc (使用 config::*)
 ```
@@ -52,6 +56,10 @@ if let Some(ocr_config) = config.remote_ocr {
 
 if let Some(apiserver_config) = config.apiserver {
     // 使用 API Server 配置
+}
+
+if let Some(object_storage_config) = config.object_storage {
+    // 使用对象存储配置
 }
 
 if let Some(nodemanage_config) = config.nodemanage {
@@ -93,6 +101,16 @@ perm_url = "https://example.com/api/perm"
 [rsync]
 # ... Rsync 配置
 
+[object_storage]
+access_key = "your_qiniu_access_key"
+secret_key = "your_qiniu_secret_key"
+bucket = "your-bucket-name"
+region = "z0"
+domain = "your-bucket-domain.example.com"
+
+[datalink_engine]
+backend = "memory"
+
 [nodemanage]
 table_prefix = "node_"
 rsagent_package_url = "https://example.com/rsagent.tar.gz"
@@ -105,6 +123,11 @@ ssh_connect_timeout_secs = 10
 name = "metrics"
 version = "1.0.0"
 package_url = "https://example.com/plugins/metrics.tar.gz"
+
+[[nodemanage.install_plugins]]
+name = "shell"
+version = "1.0.0"
+package_url = "https://example.com/plugins/shell.tar.gz"
 
 [nodemanage.mysql]
 host = "127.0.0.1"
