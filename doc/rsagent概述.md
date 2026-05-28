@@ -22,7 +22,7 @@
 
 如果节点侧没有常驻代理，平台只能记录节点的静态信息，很难判断节点当前是否在线、服务是否正常、网络是否可达、节点具备哪些能力。
 
-`rsagent` 通过持续上报心跳指标、基础状态和能力信息，让平台可以判断节点是否在线、是否异常、具备哪些能力。心跳指标不直接由 NodeManage 自行计算，也不应该是一条隐含写入链路；节点 heartbeat 链路需要先由 datalink-engine 创建和纳管，再写入 VictoriaMetrics，并由独立的 query-engine 组件统一查询和解释节点状态。
+`rsagent` 通过持续上报心跳指标、基础状态和能力信息，让平台可以判断节点是否在线、是否异常、具备哪些能力。心跳指标不直接由 NodeManage 自行计算，也不应该是一条隐含写入链路；节点 heartbeat 链路需要先由 datalink-engine 创建和纳管，再写入 VictoriaMetrics，并由独立的 query-engine 组件统一查询 heartbeat 数据，再由 `nodemanage` 计算节点状态。
 
 ### 3. 远程操作缺少稳定通道
 
@@ -46,13 +46,15 @@ NodeManage 是平台侧的节点管理服务，负责节点信息管理、安装
 
 - NodeManage 负责“管理视角”和“控制平面”。
 - `rsagent` 负责“节点视角”和“执行平面”。
+- `job-manage`（也可简称 `jm`）负责“作业平台”和“任务编排平面”，真正把脚本或命令任务下发到 NodeManage 纳管的节点。
+- `rsagent` 作为节点侧代理，负责接收 `job-manage` 下发的脚本或命令任务，并在节点侧执行后回传结果。
 - datalink-engine 负责“数据链路登记、result_table 映射和存储位置管理”。
 - VictoriaMetrics 负责“节点指标存储”。
-- query-engine 负责“节点状态查询与解释”。
+- query-engine 负责“heartbeat 数据查询”。
 
 ## 第一阶段目标
 
-`rsagent` 第一阶段不追求复杂的远程控制能力，而是优先打通节点纳管闭环：
+`rsagent` 第一阶段不追求复杂的远程控制能力，但除了打通节点纳管闭环之外，还需要明确 `job-manage`（`jm`）与 `rsagent` 的通信方式，并支持由 `jm` 向纳管节点下发脚本或命令执行任务：
 
 1. NodeManage 通过 SSH 在线安装 `rsagent`。
 2. `rsagent` 启动后向 NodeManage 注册节点。
@@ -61,7 +63,16 @@ NodeManage 是平台侧的节点管理服务，负责节点信息管理、安装
 5. NodeManage 安装 `rsagent` 时下发配置文件，配置中包含 heartbeat 的 `data_link_id`。
 6. `rsagent` 周期性按该数据链路定义向 VictoriaMetrics 上报本节点 heartbeat 指标，指标维度包含节点唯一标识信息。
 7. `rsagent` 定期通过 datalink-engine 查询 `data_link_id` 对应的链路信息，例如每 5 分钟同步一次配置。
-8. query-engine 通过 datalink-engine 按 `data_link_id` 获取 heartbeat 链路的 `result_table` 和存储映射，再查询 VictoriaMetrics 判断每个节点的在线状态、最近心跳时间和基础健康状态。
-9. NodeManage 通过 query-engine 获取节点状态，并在节点列表或详情页中展示。
+8. query-engine 通过 datalink-engine 按 `data_link_id` 获取 heartbeat 链路的 `result_table` 和存储映射，再查询 VictoriaMetrics 返回 heartbeat 数据。
+9. NodeManage 通过 query-engine 获取 heartbeat 数据并计算节点状态，再在节点列表或详情页中展示。
+10. `job-manage` 与 `rsagent` 之间需要确定稳定通信方式，用于向节点下发脚本或命令任务。
+11. `rsagent` 需要支持接收 `job-manage` 下发的脚本或命令，并在节点侧执行后回传完整执行结果。
 
-这个阶段的重点是让节点能够被稳定接入、识别和观测，并明确 NodeManage、rsagent、datalink-engine、VictoriaMetrics、query-engine 之间的职责边界，为后续协议设计、任务下发和远程执行能力打基础。
+在这个阶段里，真正面向纳管节点下发脚本和 task 的平台应是 `job-manage`（`jm`）：
+
+- `NodeManage` 负责节点纳管和节点选择范围；
+- `job-manage` 负责创建作业、选择节点，并通过与 `rsagent` 的通信通道下发脚本或命令任务；
+- `rsagent` 负责在节点侧接收、执行并回传结果；
+- 因此，`jm ↔ rsagent` 的通信协议和脚本下发执行主链路，属于第一阶段就需要明确的设计内容。
+
+这个阶段的重点是让节点能够被稳定接入、识别和观测，并明确 NodeManage、job-manage、rsagent、datalink-engine、VictoriaMetrics、query-engine 之间的职责边界，为后续协议设计、任务下发和远程执行能力打基础。

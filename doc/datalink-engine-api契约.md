@@ -396,7 +396,7 @@ storage_type   = victoriametrics | mysql
 - rsagent 运行中：
   - 按 datasource 上报 heartbeat 到 VM
   - 每 5 分钟通过 `data_link_id` 向 datalink-engine 拉取链路配置
-- query-engine：通过 `data_link_id` 获取 datasource/etl_pipeline/result_table/storage 映射并查询节点状态。
+- query-engine：通过 `data_link_id` 获取 datasource/etl_pipeline/result_table/storage 映射并查询 heartbeat 数据。
 
 ---
 
