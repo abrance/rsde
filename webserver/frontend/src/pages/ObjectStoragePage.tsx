@@ -130,11 +130,13 @@ function normalizeDownloadUrl(value?: string | null): string | null {
 
     try {
         const parsed = new URL(value)
+        const isWhitelistedHttpDownloadHost =
+            parsed.protocol === 'http:' && parsed.hostname === 'file.xiaoyxq.top'
         const isLocalHttp =
             parsed.protocol === 'http:' &&
             (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]')
 
-        if (parsed.protocol === 'https:' || isLocalHttp) {
+        if (parsed.protocol === 'https:' || isLocalHttp || isWhitelistedHttpDownloadHost) {
             return parsed.toString()
         }
 

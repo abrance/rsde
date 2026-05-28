@@ -753,6 +753,41 @@ describe('ObjectStoragePage', () => {
         expect(within(detailPanel).queryByRole('button', { name: '复制链接' })).not.toBeInTheDocument()
     })
 
+    it('renders whitelisted http download url in object detail as a link', async () => {
+        const fetchMock = vi
+            .fn()
+            .mockResolvedValueOnce(jsonResponse(populatedListResponse))
+            .mockResolvedValueOnce(
+                jsonResponse({
+                    success: true,
+                    data: {
+                        key: 'demo.png',
+                        name: 'demo.png',
+                        is_directory: false,
+                        size: 42,
+                        hash: 'hash-demo',
+                        mime_type: 'image/png',
+                        updated_at: '2026-05-22T00:00:00Z',
+                        download_url: 'http://file.xiaoyxq.top/demo.png?token=test',
+                        storage_class: '0',
+                    },
+                }),
+            )
+        vi.stubGlobal('fetch', fetchMock)
+
+        render(<ObjectStoragePage />)
+
+        fireEvent.click(await screen.findByRole('button', { name: '查看 demo.png 详情' }))
+
+        const detailPanel = await screen.findByRole('complementary', { name: '对象详情面板' })
+        const link = within(detailPanel).getByRole('link', {
+            name: 'http://file.xiaoyxq.top/demo.png?token=test',
+        })
+        expect(link).toHaveAttribute('href', 'http://file.xiaoyxq.top/demo.png?token=test')
+        expect(within(detailPanel).getByRole('button', { name: '复制链接' })).toBeInTheDocument()
+        expect(within(detailPanel).queryByText('未配置公开访问域名')).not.toBeInTheDocument()
+    })
+
     it('clears stale object detail when the next detail request fails', async () => {
         const fetchMock = vi
             .fn()
