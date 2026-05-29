@@ -7,7 +7,7 @@ use crate::{
     },
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DataLinkService<R: DataLinkRepository> {
     repository: R,
 }
