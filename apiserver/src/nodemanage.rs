@@ -4,17 +4,28 @@ use axum::{
     http::StatusCode,
     routing::{delete, get, patch, post, put},
 };
+use chrono::{TimeDelta, Utc};
+use datalink_engine::{
+    ApplyDataLinkOptions, ApplyDataLinkSpec, CollectMethod, DataLinkBundle, DataLinkStatus,
+    DataSourceInput, DataType, EtlMode, EtlPipelineInput, ResultTableInput, StorageType,
+};
 use nodemanage::{
     AgentRegistration, CreateNode, InstallNodeRequest, InstallPlugin, MemoryNodeRepository,
     MySqlNodeRepository, Node, NodeManageError, NodeManager, NodeStatus, NoopRsAgentInstaller,
     PaginatedResult, PaginationParams, RemoteExecutor, RepositoryRegistrationWaiter,
     ShellRemoteExecutor, SshRsAgentInstaller, UpdateNode,
 };
+use query_engine::{InMemoryHeartbeatStore, QueryEngine};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
+
+use crate::datalink_engine::SharedMemoryRuntime;
 
 type MemoryManager = NodeManager<MemoryNodeRepository, NoopRsAgentInstaller>;
 type MysqlManager = NodeManager<MySqlNodeRepository, SshRsAgentInstaller>;
+type MemoryQueryEngine =
+    QueryEngine<datalink_engine::storage::memory::MemoryDataLinkRepository, InMemoryHeartbeatStore>;
 
 #[derive(Clone)]
 enum AppNodeManager {
@@ -97,13 +108,97 @@ impl AppNodeManager {
 pub struct NodeManageState {
     manager: AppNodeManager,
     config: config::nodemanage::NodeManageConfig,
+    query_engine: Option<MemoryQueryEngine>,
+    heartbeat_data_link_id: Option<String>,
 }
 
 impl NodeManageState {
     pub async fn new(config: config::nodemanage::NodeManageConfig) -> anyhow::Result<Self> {
-        let manager = assemble_manager(&config).await?;
-        Ok(Self { manager, config })
+        Self::new_with_shared_memory(config, None).await
     }
+
+    pub async fn new_with_shared_memory(
+        config: config::nodemanage::NodeManageConfig,
+        shared: Option<SharedMemoryRuntime>,
+    ) -> anyhow::Result<Self> {
+        let heartbeat_data_link_id = shared
+            .as_ref()
+            .map(|shared| bootstrap_heartbeat_datalink(shared, &config))
+            .transpose()?
+            .map(|bundle| bundle.data_link.data_link_id);
+        let (manager, query_engine) = assemble_manager(&config, shared).await?;
+        Ok(Self {
+            manager,
+            config,
+            query_engine,
+            heartbeat_data_link_id,
+        })
+    }
+}
+
+fn heartbeat_apply_spec(config: &config::nodemanage::NodeManageConfig) -> ApplyDataLinkSpec {
+    ApplyDataLinkSpec {
+        name: "nodemanage_node_heartbeat".to_string(),
+        description: Some("shared heartbeat datalink for all managed nodes".to_string()),
+        domain: "nodemanage".to_string(),
+        owner_service: "nodemanage".to_string(),
+        data_type: DataType::Metric,
+        status: DataLinkStatus::Active,
+        status_message: None,
+        datasource: DataSourceInput {
+            producer: "rsagent".to_string(),
+            data_type: DataType::Metric,
+            collect_method: CollectMethod::Agent,
+            protocol: Some("http".to_string()),
+            interval_seconds: Some(config.heartbeat.interval_seconds),
+            labels: HashMap::from([
+                ("domain".to_string(), "nodemanage".to_string()),
+                ("link_purpose".to_string(), "node_heartbeat".to_string()),
+            ]),
+            dimension_keys: vec![
+                "node_id".to_string(),
+                "agent_id".to_string(),
+                "node_ip".to_string(),
+            ],
+            auth_ref: None,
+            config: HashMap::new(),
+        },
+        etl_pipeline: EtlPipelineInput {
+            mode: EtlMode::Passthrough,
+            config: HashMap::new(),
+        },
+        result_table: ResultTableInput {
+            result_table_name: config.heartbeat.result_table_name.clone(),
+            storage_type: StorageType::Victoriametrics,
+            storage_cluster: Some(config.heartbeat.storage_cluster.clone()),
+            database: None,
+            table_name: None,
+            metric_name: Some(config.heartbeat.metric_name.clone()),
+            query_template: Some(config.heartbeat.query_template.clone()),
+            schema: HashMap::from([
+                ("timestamp".to_string(), "datetime".to_string()),
+                ("node_id".to_string(), "string".to_string()),
+                ("agent_id".to_string(), "string".to_string()),
+                ("node_ip".to_string(), "string".to_string()),
+            ]),
+            retention_days: Some(config.heartbeat.retention_days),
+        },
+    }
+}
+
+fn bootstrap_heartbeat_datalink(
+    shared: &SharedMemoryRuntime,
+    config: &config::nodemanage::NodeManageConfig,
+) -> anyhow::Result<DataLinkBundle> {
+    shared
+        .datalink_service
+        .apply_data_link(
+            heartbeat_apply_spec(config),
+            ApplyDataLinkOptions {
+                idempotency_key: Some("nodemanage-bootstrap-heartbeat-datalink".to_string()),
+            },
+        )
+        .map_err(|err| anyhow::anyhow!(err.to_string()))
 }
 
 fn map_install_plugins(plugins: &[config::nodemanage::InstallPluginConfig]) -> Vec<InstallPlugin> {
@@ -144,7 +239,8 @@ pub fn apply_install_request_defaults(
 
 async fn assemble_manager(
     config: &config::nodemanage::NodeManageConfig,
-) -> anyhow::Result<AppNodeManager> {
+    shared: Option<SharedMemoryRuntime>,
+) -> anyhow::Result<(AppNodeManager, Option<MemoryQueryEngine>)> {
     if let Some(mysql) = &config.mysql {
         let repository = MySqlNodeRepository::new(mysql.clone(), config.table_prefix.clone())
             .await
@@ -157,14 +253,20 @@ async fn assemble_manager(
             map_install_plugins(&config.install_plugins),
             config.register_wait_timeout_secs,
         );
-        Ok(AppNodeManager::Mysql(NodeManager::new(
-            repository, installer,
-        )))
+        Ok((
+            AppNodeManager::Mysql(NodeManager::new(repository, installer)),
+            None,
+        ))
     } else {
-        Ok(AppNodeManager::Memory(NodeManager::new(
-            MemoryNodeRepository::default(),
-            NoopRsAgentInstaller,
-        )))
+        let query_engine =
+            shared.map(|shared| QueryEngine::new(shared.datalink_service, shared.heartbeat_store));
+        Ok((
+            AppNodeManager::Memory(NodeManager::new(
+                MemoryNodeRepository::default(),
+                NoopRsAgentInstaller,
+            )),
+            query_engine,
+        ))
     }
 }
 
@@ -372,6 +474,49 @@ async fn update_status(
         .map_err(node_error)
 }
 
+async fn refresh_status(
+    State(state): State<NodeManageState>,
+    Path(id): Path<String>,
+) -> Result<Json<NodeResponse>, (StatusCode, Json<NodeResponse>)> {
+    let query_engine = state.query_engine.as_ref().ok_or_else(|| {
+        node_error(NodeManageError::InvalidInput(
+            "query engine unavailable".to_string(),
+        ))
+    })?;
+
+    match &state.manager {
+        AppNodeManager::Memory(manager) => {
+            let heartbeat_data_link_id =
+                state.heartbeat_data_link_id.as_ref().ok_or_else(|| {
+                    node_error(NodeManageError::InvalidInput(
+                        "heartbeat datalink unavailable".to_string(),
+                    ))
+                })?;
+
+            manager
+                .refresh_status_from_query(
+                    &id,
+                    query_engine,
+                    heartbeat_data_link_id,
+                    Utc::now(),
+                    TimeDelta::seconds(state.config.heartbeat.status_window_secs as i64),
+                )
+                .await
+                .map(|node| {
+                    Json(NodeResponse {
+                        success: true,
+                        data: Some(node),
+                        error: None,
+                    })
+                })
+                .map_err(node_error)
+        }
+        AppNodeManager::Mysql(_) => Err(node_error(NodeManageError::InvalidInput(
+            "query refresh not supported for mysql backend yet".to_string(),
+        ))),
+    }
+}
+
 async fn install_node(
     State(state): State<NodeManageState>,
     Json(mut req): Json<InstallNodeRequest>,
@@ -422,7 +567,20 @@ async fn register_agent(
 pub async fn create_routes(config: config::nodemanage::NodeManageConfig) -> anyhow::Result<Router> {
     let state = NodeManageState::new(config).await?;
 
-    Ok(Router::new()
+    Ok(build_router(state))
+}
+
+pub async fn create_routes_with_shared_memory(
+    config: config::nodemanage::NodeManageConfig,
+    shared: SharedMemoryRuntime,
+) -> anyhow::Result<Router> {
+    let state = NodeManageState::new_with_shared_memory(config, Some(shared)).await?;
+
+    Ok(build_router(state))
+}
+
+fn build_router(state: NodeManageState) -> Router {
+    Router::new()
         .route("/health", get(health_check))
         .route("/node", post(create_node))
         .route("/node", get(list_nodes))
@@ -431,7 +589,8 @@ pub async fn create_routes(config: config::nodemanage::NodeManageConfig) -> anyh
         .route("/node/:id", delete(delete_node))
         .route("/node/:id/heartbeat", post(heartbeat_node))
         .route("/node/:id/status", patch(update_status))
+        .route("/node/:id/status/refresh", post(refresh_status))
         .route("/install", post(install_node))
         .route("/agent/register", post(register_agent))
-        .with_state(state))
+        .with_state(state)
 }
