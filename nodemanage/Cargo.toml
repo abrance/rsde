@@ -8,7 +8,9 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 config = { path = "../common/config" }
+datalink-engine = { path = "../datalink-engine" }
 mysql_async = { workspace = true }
+query-engine = { path = "../query-engine" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
