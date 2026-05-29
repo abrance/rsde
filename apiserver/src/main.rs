@@ -1,10 +1,4 @@
-mod anybox;
-mod datalink_engine;
-mod image;
-mod nodemanage;
-mod ocr;
-mod prompt;
-use apiserver::{build_frontend_router, object_storage};
+use apiserver::{build_api_app, build_frontend_router, image};
 
 use axum::Router;
 use config::{ConfigLoader, GlobalConfig};
@@ -60,18 +54,11 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("API_CONFIG").unwrap_or_else(|_| "apiserver/config.toml".to_string());
     info!("加载配置文件: {}", config_path);
     let global_config = GlobalConfig::from_file(&config_path)?;
-    let remote_ocr_config = global_config
-        .remote_ocr
-        .expect("配置文件中缺少 [remote_ocr] 部分");
     let image_hosting_config = global_config
         .image_hosting
+        .clone()
         .expect("配置文件中缺少 [image_hosting] 部分");
-    let anybox_config = global_config.anybox;
-    let prompt_config = global_config.prompt;
-    let object_storage_config = global_config.object_storage;
-    let datalink_engine_config = global_config.datalink_engine;
-    let nodemanage_config = global_config.nodemanage;
-    let apiserver_config = global_config.apiserver.unwrap_or_default();
+    let apiserver_config = global_config.apiserver.clone().unwrap_or_default();
     info!("配置加载成功");
 
     // 启动图片清理任务
@@ -89,46 +76,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut app = Router::new()
         .route("/metrics", axum::routing::get(metrics_handler))
-        .nest(
-            "/api/ocr",
-            ocr::create_routes(remote_ocr_config, image_hosting_config.storage_dir.clone()),
-        )
-        .nest("/api/image", image::create_routes(image_hosting_config))
-        .nest("/api/rc", rc::create_routes());
-
-    // 添加 Anybox 路由（如果配置存在）
-    if let Some(anybox_cfg) = anybox_config {
-        info!("启用 Anybox 服务");
-        let anybox_routes = anybox::create_routes(anybox_cfg).await?;
-        app = app.nest("/api/anybox", anybox_routes);
-    }
-
-    // 添加 Prompt 路由（如果配置存在）
-    if let Some(prompt_cfg) = prompt_config {
-        info!("启用 Prompt 服务");
-        let prompt_routes = prompt::create_routes(prompt_cfg).await?;
-        app = app.nest("/api/prompt", prompt_routes);
-    }
-
-    // 添加 Object Storage 路由（如果配置存在）
-    if let Some(object_storage_cfg) = object_storage_config {
-        info!("启用 Object Storage 服务");
-        let object_storage_routes = object_storage::create_routes(object_storage_cfg);
-        app = app.nest("/api/object-storage", object_storage_routes);
-    }
-
-    // 添加 DataLink Engine 路由（如果配置存在）
-    if let Some(datalink_cfg) = datalink_engine_config {
-        info!("启用 DataLink Engine 服务");
-        let datalink_routes = datalink_engine::create_routes(datalink_cfg)?;
-        app = app.nest("/api/datalink/v1", datalink_routes);
-    }
-
-    if let Some(nodemanage_cfg) = nodemanage_config {
-        info!("启用 NodeManage 服务");
-        let nodemanage_routes = nodemanage::create_routes(nodemanage_cfg).await?;
-        app = app.nest("/api/nodes", nodemanage_routes);
-    }
+        .merge(build_api_app(global_config).await?);
 
     if !has_frontend {
         error!("前端文件未找到: {frontend_dir}");

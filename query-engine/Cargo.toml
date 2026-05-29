@@ -1,0 +1,12 @@
+[package]
+name = "query-engine"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+datalink-engine = { path = "../datalink-engine" }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

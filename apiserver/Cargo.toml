@@ -19,6 +19,7 @@ prompt = { path = "../prompt" }
 nodemanage = { path = "../nodemanage" }
 rc = { path = "../rc" }
 datalink-engine = { path = "../datalink-engine" }
+query-engine = { path = "../query-engine" }
 axum = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

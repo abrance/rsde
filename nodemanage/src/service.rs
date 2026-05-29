@@ -1,4 +1,6 @@
 use chrono::Utc;
+use chrono::{DateTime, TimeDelta};
+use query_engine::{HeartbeatStore, QueryEngine};
 
 use crate::{
     AgentRegistration, CreateNode, InstallNodeRequest, InstallNodeResult, Node, NodeManageError,
@@ -92,6 +94,47 @@ where
             },
         )
         .await
+    }
+
+    pub async fn refresh_status_from_query<D, H>(
+        &self,
+        id: &str,
+        query_engine: &QueryEngine<D, H>,
+        heartbeat_data_link_id: &str,
+        now: DateTime<Utc>,
+        status_window: TimeDelta,
+    ) -> Result<Node>
+    where
+        D: datalink_engine::DataLinkRepository,
+        H: HeartbeatStore,
+    {
+        let mut node = self
+            .repository
+            .get(id)
+            .await?
+            .ok_or_else(|| NodeManageError::NotFound(id.to_string()))?;
+
+        let sample = query_engine
+            .latest_heartbeat_by_data_link_id(heartbeat_data_link_id, node.id.clone())
+            .map_err(|err| NodeManageError::Storage(err.to_string()))?;
+
+        match sample {
+            Some(sample) if now - sample.observed_at <= status_window => {
+                node.status = NodeStatus::Online;
+                node.last_heartbeat_at = Some(sample.observed_at);
+            }
+            Some(sample) => {
+                node.status = NodeStatus::Offline;
+                node.last_heartbeat_at = Some(sample.observed_at);
+            }
+            None => {
+                node.status = NodeStatus::Offline;
+                node.last_heartbeat_at = None;
+            }
+        }
+
+        node.updated_at = now;
+        self.repository.update(node).await
     }
 
     pub async fn install_node(&self, request: InstallNodeRequest) -> Result<InstallNodeResult> {

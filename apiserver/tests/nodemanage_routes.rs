@@ -1,11 +1,99 @@
 use axum::{
-    body::Body,
+    Router,
+    body::{Body, to_bytes},
     http::{Method, Request, StatusCode},
 };
 use config::mysql::MysqlConfig;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::env;
 use tower::ServiceExt;
+
+async fn build_shared_memory_app() -> (Router, apiserver::datalink_engine::SharedMemoryRuntime) {
+    let shared = apiserver::datalink_engine::SharedMemoryRuntime::new();
+    let datalink_routes = apiserver::datalink_engine::create_routes_with_shared_memory(
+        config::datalink_engine::DataLinkEngineConfig {
+            backend: config::datalink_engine::DataLinkEngineBackend::Memory,
+            mysql: None,
+        },
+        shared.clone(),
+    )
+    .expect("build datalink routes");
+    let nodemanage_routes = apiserver::nodemanage::create_routes_with_shared_memory(
+        config::nodemanage::NodeManageConfig::default(),
+        shared.clone(),
+    )
+    .await
+    .expect("build nodemanage routes");
+
+    (
+        Router::new()
+            .nest("/api/datalink/v1", datalink_routes)
+            .nest("/api/nodes", nodemanage_routes),
+        shared,
+    )
+}
+
+fn bootstrapped_heartbeat_apply_payload(result_table_name: &str) -> Value {
+    json!({
+        "name": "nodemanage_node_heartbeat",
+        "description": "shared heartbeat datalink for all managed nodes",
+        "domain": "nodemanage",
+        "owner_service": "nodemanage",
+        "data_type": "metric",
+        "status": "active",
+        "status_message": null,
+        "datasource": {
+            "producer": "rsagent",
+            "data_type": "metric",
+            "collect_method": "agent",
+            "protocol": "http",
+            "interval_seconds": 60,
+            "labels": {
+                "domain": "nodemanage",
+                "link_purpose": "node_heartbeat"
+            },
+            "dimension_keys": ["node_id", "agent_id", "node_ip"],
+            "auth_ref": null,
+            "config": {}
+        },
+        "etl_pipeline": {
+            "mode": "passthrough",
+            "config": {}
+        },
+        "result_table": {
+            "result_table_name": result_table_name,
+            "storage_type": "victoriametrics",
+            "storage_cluster": "default",
+            "database": null,
+            "table_name": null,
+            "metric_name": "nm_node_heartbeat",
+            "schema": {
+                "timestamp": "datetime",
+                "node_id": "string",
+                "agent_id": "string",
+                "node_ip": "string"
+            },
+            "retention_days": 7,
+            "query_template": "query heartbeat"
+        }
+    })
+}
+
+fn make_json_request(method: Method, path: &str, body: Value) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(path)
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .expect("request")
+}
+
+async fn read_json(response: axum::response::Response) -> Value {
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    serde_json::from_slice(&bytes).expect("json body")
+}
 
 fn mysql_test_config() -> MysqlConfig {
     MysqlConfig {
@@ -47,6 +135,7 @@ fn nodemanage_assembly_applies_config_install_defaults_without_silent_fallback()
         }],
         register_wait_timeout_secs: 45,
         ssh_connect_timeout_secs: 12,
+        heartbeat: config::nodemanage::HeartbeatDataLinkConfig::default(),
     };
 
     let request = nodemanage::InstallNodeRequest {
@@ -168,6 +257,181 @@ async fn nodemanage_install_uses_config_package_url_when_request_omits_it() {
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["success"], true);
+}
+
+#[tokio::test]
+async fn nodemanage_refresh_status_uses_shared_datalink_runtime() {
+    let (app, _shared) = build_shared_memory_app().await;
+
+    let bootstrapped = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/datalink/v1/datalinks/by-result-table/nm_node_heartbeat")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bootstrapped.status(), StatusCode::OK);
+    let bootstrapped_json = read_json(bootstrapped).await;
+    assert_eq!(
+        bootstrapped_json["data"]["result_table"]["result_table_name"],
+        "nm_node_heartbeat"
+    );
+
+    let created = app
+        .clone()
+        .oneshot(make_json_request(
+            Method::POST,
+            "/api/nodes/node",
+            json!({
+                "name": "worker-refresh",
+                "endpoint": "http://worker-refresh:8080",
+                "labels": ["edge"]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::OK);
+    let created_json = read_json(created).await;
+    let node_id = created_json["data"]["id"].as_str().unwrap().to_string();
+
+    let marked_online = app
+        .clone()
+        .oneshot(make_json_request(
+            Method::PATCH,
+            &format!("/api/nodes/node/{node_id}/status"),
+            json!({"status": "online"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(marked_online.status(), StatusCode::OK);
+
+    let refreshed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/api/nodes/node/{node_id}/status/refresh"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(refreshed.status(), StatusCode::OK);
+    let refreshed_json = read_json(refreshed).await;
+    assert_eq!(refreshed_json["success"], true);
+    assert_eq!(refreshed_json["data"]["status"], "offline");
+    assert!(refreshed_json["data"]["last_heartbeat_at"].is_null());
+
+    let loaded = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/api/nodes/node/{node_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(loaded.status(), StatusCode::OK);
+    let loaded_json = read_json(loaded).await;
+    assert_eq!(loaded_json["data"]["status"], "offline");
+}
+
+#[tokio::test]
+async fn nodemanage_refresh_status_tracks_bootstrapped_datalink_id_after_table_rename() {
+    let (app, shared) = build_shared_memory_app().await;
+
+    let bootstrapped = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/datalink/v1/datalinks/by-result-table/nm_node_heartbeat")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bootstrapped.status(), StatusCode::OK);
+    let bootstrapped_json = read_json(bootstrapped).await;
+    let data_link_id = bootstrapped_json["data"]["data_link"]["data_link_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let updated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri("/api/datalink/v1/datalinks:apply")
+                .header("content-type", "application/json")
+                .header(
+                    "x-idempotency-key",
+                    "nodemanage-bootstrap-heartbeat-datalink-v2",
+                )
+                .body(Body::from(
+                    bootstrapped_heartbeat_apply_payload("nm_node_heartbeat_v2").to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.status(), StatusCode::OK);
+    let updated_json = read_json(updated).await;
+    assert_eq!(
+        updated_json["data"]["data_link"]["data_link_id"],
+        data_link_id
+    );
+    assert_eq!(
+        updated_json["data"]["result_table"]["result_table_name"],
+        "nm_node_heartbeat_v2"
+    );
+
+    let created = app
+        .clone()
+        .oneshot(make_json_request(
+            Method::POST,
+            "/api/nodes/node",
+            json!({
+                "name": "worker-refresh-rename",
+                "endpoint": "http://worker-refresh-rename:8080",
+                "labels": ["edge"]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::OK);
+    let created_json = read_json(created).await;
+    let node_id = created_json["data"]["id"].as_str().unwrap().to_string();
+
+    shared.heartbeat_store.insert(
+        "nm_node_heartbeat_v2",
+        query_engine::HeartbeatSample {
+            node_id: node_id.clone(),
+            observed_at: chrono::Utc::now(),
+        },
+    );
+
+    let refreshed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/api/nodes/node/{node_id}/status/refresh"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(refreshed.status(), StatusCode::OK);
+    let refreshed_json = read_json(refreshed).await;
+    assert_eq!(refreshed_json["data"]["status"], "online");
+    assert!(refreshed_json["data"]["last_heartbeat_at"].is_string());
 }
 
 #[tokio::test]

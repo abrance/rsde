@@ -1,0 +1,11 @@
+[package]
+name = "job-manage"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+nodemanage = { path = "../nodemanage" }
+serde = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

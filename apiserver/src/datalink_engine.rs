@@ -15,19 +15,41 @@ use datalink_engine::{
     StorageType, bootstrap,
     storage::{memory::MemoryDataLinkRepository, mysql::MysqlDataLinkRepository},
 };
+use query_engine::InMemoryHeartbeatStore;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 type ApiResult<T> = (StatusCode, Json<ApiResponse<T>>);
 const MAX_JSON_BODY_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone)]
-struct DataLinkState {
+pub struct DataLinkState {
     service: Arc<DataLinkServiceRuntime>,
 }
 
 enum DataLinkServiceRuntime {
     Memory(DataLinkService<MemoryDataLinkRepository>),
     Mysql(DataLinkService<MysqlDataLinkRepository>),
+}
+
+#[derive(Clone)]
+pub struct SharedMemoryRuntime {
+    pub datalink_service: DataLinkService<MemoryDataLinkRepository>,
+    pub heartbeat_store: InMemoryHeartbeatStore,
+}
+
+impl SharedMemoryRuntime {
+    pub fn new() -> Self {
+        Self {
+            datalink_service: DataLinkService::new(MemoryDataLinkRepository::new()),
+            heartbeat_store: InMemoryHeartbeatStore::new(),
+        }
+    }
+}
+
+impl Default for SharedMemoryRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DataLinkServiceRuntime {
@@ -146,10 +168,27 @@ fn default_page_size() -> u32 {
 }
 
 pub fn create_routes(config: DataLinkEngineConfig) -> anyhow::Result<Router> {
+    let state = build_state(config, None)?;
+    Ok(build_router(state))
+}
+
+pub fn create_routes_with_shared_memory(
+    config: DataLinkEngineConfig,
+    shared: SharedMemoryRuntime,
+) -> anyhow::Result<Router> {
+    let state = build_state(config, Some(shared))?;
+    Ok(build_router(state))
+}
+
+fn build_state(
+    config: DataLinkEngineConfig,
+    shared: Option<SharedMemoryRuntime>,
+) -> anyhow::Result<DataLinkState> {
     let service = match config.backend {
-        DataLinkEngineBackend::Memory => {
-            DataLinkServiceRuntime::Memory(bootstrap::build_memory_service())
-        }
+        DataLinkEngineBackend::Memory => match shared {
+            Some(shared) => DataLinkServiceRuntime::Memory(shared.datalink_service),
+            None => DataLinkServiceRuntime::Memory(bootstrap::build_memory_service()),
+        },
         DataLinkEngineBackend::Mysql => {
             let mysql_config = config
                 .mysql
@@ -158,11 +197,13 @@ pub fn create_routes(config: DataLinkEngineConfig) -> anyhow::Result<Router> {
         }
     };
 
-    let state = DataLinkState {
+    Ok(DataLinkState {
         service: Arc::new(service),
-    };
+    })
+}
 
-    Ok(Router::new()
+fn build_router(state: DataLinkState) -> Router {
+    Router::new()
         .route("/health", get(health_check))
         .route("/datalinks:apply", put(apply_data_link))
         .route("/datalinks", get(list_data_links))
@@ -172,7 +213,7 @@ pub fn create_routes(config: DataLinkEngineConfig) -> anyhow::Result<Router> {
             get(get_by_result_table_name),
         )
         .route("/datalinks/:id/status", patch(patch_data_link_status))
-        .with_state(state))
+        .with_state(state)
 }
 
 async fn health_check() -> Json<serde_json::Value> {

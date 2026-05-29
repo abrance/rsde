@@ -313,6 +313,29 @@ mod tests {
     }
 
     #[test]
+    fn nodemanage_heartbeat_defaults_match_bootstrap_contract() {
+        let raw = r#"
+            [nodemanage]
+            rsagent_package_url = "https://example.com/rsagent.tar.gz"
+        "#;
+
+        let cfg: GlobalConfig = toml::from_str(raw).unwrap();
+        let nodemanage = cfg.nodemanage.unwrap();
+
+        assert_eq!(nodemanage.heartbeat.result_table_name, "nm_node_heartbeat");
+        assert_eq!(nodemanage.heartbeat.metric_name, "nm_node_heartbeat");
+        assert_eq!(
+            nodemanage.heartbeat.query_template,
+            "query $metric_name where node_id = $node_id and agent_id = $agent_id and node_ip = $node_ip between $start_at and $end_at"
+        );
+        assert_eq!(nodemanage.heartbeat.storage_cluster, "default");
+        assert_eq!(nodemanage.heartbeat.interval_seconds, 60);
+        assert_eq!(nodemanage.heartbeat.retention_days, 7);
+        assert_eq!(nodemanage.heartbeat.refresh_interval_secs, 60);
+        assert_eq!(nodemanage.heartbeat.status_window_secs, 300);
+    }
+
+    #[test]
     fn image_hosting_config_can_be_deserialized() {
         let raw = r#"
             [image_hosting]
