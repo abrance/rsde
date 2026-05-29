@@ -10,6 +10,7 @@ members = [
     "datalink-engine",
     "nodemanage",
     "query-engine",
+    "job-manage",
 ]
 resolver = "2"
 
