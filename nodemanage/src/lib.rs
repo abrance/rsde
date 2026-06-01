@@ -13,7 +13,13 @@ pub use bootstrap::{
     ShellRemoteExecutor, SshAuth, SshConnectionRequest, SshRsAgentInstaller,
 };
 pub use error::{NodeManageError, Result};
-pub use models::{CreateNode, Node, NodeStatus, PaginatedResult, PaginationParams, UpdateNode};
-pub use protocol::{AgentRegistration, AgentRegistry};
+pub use models::{
+    BindingState, CreateNode, Node, NodeAgentBinding, NodeStatus, NodeStatusSnapshot, OnlineStatus,
+    PaginatedResult, PaginationParams, UpdateNode,
+};
+pub use protocol::{
+    AgentRegistration, AgentRegistry, AgentRunMode, AgentSyncRequest, AgentSyncResponse,
+    HeartbeatConfig, JobManageConfig, SyncBindingState, TaskFilterDefaults,
+};
 pub use repository::{MemoryNodeRepository, MySqlNodeRepository, NodeRepository};
 pub use service::NodeManager;

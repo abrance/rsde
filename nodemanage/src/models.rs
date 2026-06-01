@@ -114,3 +114,66 @@ impl<T> PaginatedResult<T> {
         }
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BindingState {
+    Bound,
+    Stale,
+    Unbound,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NodeAgentBinding {
+    pub node_id: String,
+    pub agent_id: String,
+    pub binding_state: BindingState,
+    pub first_registered_at: DateTime<Utc>,
+    pub last_handshake_at: DateTime<Utc>,
+    pub unbind_reason: Option<String>,
+}
+
+impl NodeAgentBinding {
+    pub fn new(node_id: String, agent_id: String) -> Self {
+        let now = Utc::now();
+        Self {
+            node_id,
+            agent_id,
+            binding_state: BindingState::Bound,
+            first_registered_at: now,
+            last_handshake_at: now,
+            unbind_reason: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OnlineStatus {
+    Online,
+    Offline,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NodeStatusSnapshot {
+    pub node_id: String,
+    pub online_status: OnlineStatus,
+    pub status_reason: Option<String>,
+    pub aggregated_at: DateTime<Utc>,
+}
+
+impl NodeStatusSnapshot {
+    pub fn new(
+        node_id: String,
+        online_status: OnlineStatus,
+        status_reason: Option<String>,
+    ) -> Self {
+        Self {
+            node_id,
+            online_status,
+            status_reason,
+            aggregated_at: Utc::now(),
+        }
+    }
+}
