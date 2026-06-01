@@ -11,6 +11,7 @@ members = [
     "nodemanage",
     "query-engine",
     "job-manage",
+    "rsagent",
 ]
 resolver = "2"
 
