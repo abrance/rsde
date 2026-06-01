@@ -18,14 +18,14 @@ pub enum ObjectStorageError {
 impl std::fmt::Display for ObjectStorageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ObjectStorageError::ConfigError(msg) => write!(f, "Config error: {}", msg),
-            ObjectStorageError::InvalidInput(msg) => write!(f, "Invalid input: {}", msg),
-            ObjectStorageError::StorageError(msg) => write!(f, "Storage error: {}", msg),
-            ObjectStorageError::UploadError(msg) => write!(f, "Upload error: {}", msg),
-            ObjectStorageError::DownloadError(msg) => write!(f, "Download error: {}", msg),
-            ObjectStorageError::DeleteError(msg) => write!(f, "Delete error: {}", msg),
-            ObjectStorageError::NotFound(msg) => write!(f, "Not found: {}", msg),
-            ObjectStorageError::ObjectConflict(msg) => write!(f, "Object conflict: {}", msg),
+            ObjectStorageError::ConfigError(msg) => write!(f, "Config error: {msg}"),
+            ObjectStorageError::InvalidInput(msg) => write!(f, "Invalid input: {msg}"),
+            ObjectStorageError::StorageError(msg) => write!(f, "Storage error: {msg}"),
+            ObjectStorageError::UploadError(msg) => write!(f, "Upload error: {msg}"),
+            ObjectStorageError::DownloadError(msg) => write!(f, "Download error: {msg}"),
+            ObjectStorageError::DeleteError(msg) => write!(f, "Delete error: {msg}"),
+            ObjectStorageError::NotFound(msg) => write!(f, "Not found: {msg}"),
+            ObjectStorageError::ObjectConflict(msg) => write!(f, "Object conflict: {msg}"),
         }
     }
 }

@@ -350,10 +350,11 @@ impl ObjectStorageService {
 
         for item in stored_items {
             let visible_key = self.visible_key(&item.key);
-            if visible_key.starts_with(current_prefix) && visible_key != current_prefix {
-                if let Some(prefix) = child_prefix_from_key(current_prefix, &visible_key) {
-                    prefixes.insert(prefix);
-                }
+            if visible_key.starts_with(current_prefix)
+                && visible_key != current_prefix
+                && let Some(prefix) = child_prefix_from_key(current_prefix, &visible_key)
+            {
+                prefixes.insert(prefix);
             }
         }
 
