@@ -81,10 +81,10 @@ async fn create_textbox(
         text_box = text_box.with_title(title);
     }
 
-    if let Some(format_str) = req.format {
-        if let Some(format) = anybox::TextFormat::from_str(&format_str) {
-            text_box = text_box.with_format(format);
-        }
+    if let Some(format_str) = req.format
+        && let Some(format) = anybox::TextFormat::parse(&format_str)
+    {
+        text_box = text_box.with_format(format);
     }
 
     if let Some(language) = req.language {

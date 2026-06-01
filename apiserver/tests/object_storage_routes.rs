@@ -46,7 +46,7 @@ async fn spawn_object_storage_app_with_config(
         axum::serve(listener, app).await.unwrap();
     });
 
-    format!("http://{}", addr)
+    format!("http://{addr}")
 }
 
 #[tokio::test]
@@ -54,7 +54,7 @@ async fn object_storage_health_returns_success_envelope() {
     let base_url = spawn_object_storage_app().await;
 
     let response = reqwest::Client::new()
-        .get(format!("{}/health", base_url))
+        .get(format!("{base_url}/health"))
         .send()
         .await
         .unwrap();
@@ -74,7 +74,7 @@ async fn object_storage_objects_returns_success_envelope() {
     let base_url = spawn_object_storage_app().await;
 
     let response = reqwest::Client::new()
-        .get(format!("{}/objects?prefix=images/&limit=20", base_url))
+        .get(format!("{base_url}/objects?prefix=images/&limit=20"))
         .send()
         .await
         .unwrap();
@@ -99,7 +99,7 @@ async fn object_storage_objects_rejects_invalid_prefix_as_bad_request() {
     let base_url = spawn_object_storage_app().await;
 
     let response = reqwest::Client::new()
-        .get(format!("{}/objects?prefix=../secret", base_url))
+        .get(format!("{base_url}/objects?prefix=../secret"))
         .send()
         .await
         .unwrap();
@@ -117,7 +117,7 @@ async fn object_storage_detail_rejects_invalid_key_as_bad_request() {
     let base_url = spawn_object_storage_app().await;
 
     let response = reqwest::Client::new()
-        .get(format!("{}/objects/detail?key=../secret.txt", base_url))
+        .get(format!("{base_url}/objects/detail?key=../secret.txt"))
         .send()
         .await
         .unwrap();
@@ -135,7 +135,7 @@ async fn object_storage_detail_returns_success_envelope() {
     let base_url = spawn_object_storage_app().await;
 
     let response = reqwest::Client::new()
-        .get(format!("{}/objects/detail?key=images/demo.png", base_url))
+        .get(format!("{base_url}/objects/detail?key=images/demo.png"))
         .send()
         .await
         .unwrap();
@@ -160,7 +160,7 @@ async fn object_storage_detail_private_download_url_is_signed() {
     let base_url = spawn_object_storage_app_with_config(private_bucket_config()).await;
 
     let response = reqwest::Client::new()
-        .get(format!("{}/objects/detail?key=images/demo.png", base_url))
+        .get(format!("{base_url}/objects/detail?key=images/demo.png"))
         .send()
         .await
         .unwrap();
@@ -191,7 +191,7 @@ async fn object_storage_directories_returns_success_envelope() {
     let base_url = spawn_object_storage_app().await;
 
     let response = reqwest::Client::new()
-        .post(format!("{}/directories", base_url))
+        .post(format!("{base_url}/directories"))
         .json(&serde_json::json!({
             "prefix": "images/2026/",
             "name": "reports"
@@ -215,7 +215,7 @@ async fn object_storage_move_returns_success_envelope() {
     let base_url = spawn_object_storage_app().await;
 
     let response = reqwest::Client::new()
-        .post(format!("{}/objects/move", base_url))
+        .post(format!("{base_url}/objects/move"))
         .json(&serde_json::json!({
             "from_key": "images/old.png",
             "to_key": "archive/old.png"
@@ -239,7 +239,7 @@ async fn object_storage_move_conflict_returns_409() {
     let base_url = spawn_object_storage_app().await;
 
     let response = reqwest::Client::new()
-        .post(format!("{}/objects/move", base_url))
+        .post(format!("{base_url}/objects/move"))
         .json(&serde_json::json!({
             "from_key": "images/old.png",
             "to_key": "archive/conflict.png"
@@ -260,7 +260,7 @@ async fn object_storage_move_rejects_empty_keys() {
     let base_url = spawn_object_storage_app().await;
 
     let response = reqwest::Client::new()
-        .post(format!("{}/objects/move", base_url))
+        .post(format!("{base_url}/objects/move"))
         .json(&serde_json::json!({
             "from_key": "",
             "to_key": "archive/old.png"
@@ -282,7 +282,7 @@ async fn object_storage_delete_returns_success_envelope() {
     let base_url = spawn_object_storage_app().await;
 
     let response = reqwest::Client::new()
-        .post(format!("{}/objects/delete", base_url))
+        .post(format!("{base_url}/objects/delete"))
         .json(&serde_json::json!({
             "key": "images/old.png"
         }))
@@ -304,7 +304,7 @@ async fn object_storage_delete_rejects_empty_key() {
     let base_url = spawn_object_storage_app().await;
 
     let response = reqwest::Client::new()
-        .post(format!("{}/objects/delete", base_url))
+        .post(format!("{base_url}/objects/delete"))
         .json(&serde_json::json!({
             "key": ""
         }))
@@ -325,7 +325,7 @@ async fn object_storage_delete_batch_returns_deleted_and_failed_keys() {
     let base_url = spawn_object_storage_app().await;
 
     let response = reqwest::Client::new()
-        .post(format!("{}/objects/delete-batch", base_url))
+        .post(format!("{base_url}/objects/delete-batch"))
         .json(&serde_json::json!({
             "keys": ["images/old.png", "images/fail.png"]
         }))
@@ -354,7 +354,7 @@ async fn object_storage_delete_batch_reports_empty_key_failure() {
     let base_url = spawn_object_storage_app().await;
 
     let response = reqwest::Client::new()
-        .post(format!("{}/objects/delete-batch", base_url))
+        .post(format!("{base_url}/objects/delete-batch"))
         .json(&serde_json::json!({
             "keys": ["images/old.png", ""]
         }))
@@ -384,7 +384,7 @@ async fn object_storage_upload_token_returns_expected_fields() {
     let base_url = spawn_object_storage_app().await;
 
     let response = reqwest::Client::new()
-        .post(format!("{}/upload-token", base_url))
+        .post(format!("{base_url}/upload-token"))
         .json(&serde_json::json!({
             "prefix": "images/2026/",
             "filename": "demo.png"
@@ -416,7 +416,7 @@ async fn object_storage_upload_token_rejects_dot_only_filename() {
     let base_url = spawn_object_storage_app().await;
 
     let response = reqwest::Client::new()
-        .post(format!("{}/upload-token", base_url))
+        .post(format!("{base_url}/upload-token"))
         .json(&serde_json::json!({
             "prefix": "images/2026/",
             "filename": "./"
@@ -438,7 +438,7 @@ async fn object_storage_upload_token_rejects_directory_marker_filename() {
     let base_url = spawn_object_storage_app().await;
 
     let response = reqwest::Client::new()
-        .post(format!("{}/upload-token", base_url))
+        .post(format!("{base_url}/upload-token"))
         .json(&serde_json::json!({
             "prefix": "images/2026/",
             "filename": "reports/"
@@ -460,7 +460,7 @@ async fn object_storage_public_download_url_uses_public_base_url() {
     let base_url = spawn_object_storage_app_with_config(public_base_url_config()).await;
 
     let response = reqwest::Client::new()
-        .get(format!("{}/download-url?key=images/demo.png", base_url))
+        .get(format!("{base_url}/download-url?key=images/demo.png"))
         .send()
         .await
         .unwrap();
@@ -482,7 +482,7 @@ async fn object_storage_download_url_rejects_dot_only_key() {
     let base_url = spawn_object_storage_app().await;
 
     let response = reqwest::Client::new()
-        .get(format!("{}/download-url?key=./", base_url))
+        .get(format!("{base_url}/download-url?key=./"))
         .send()
         .await
         .unwrap();
@@ -500,7 +500,7 @@ async fn object_storage_private_download_url_is_signed() {
     let base_url = spawn_object_storage_app_with_config(private_bucket_config()).await;
 
     let response = reqwest::Client::new()
-        .get(format!("{}/download-url?key=images/demo.png", base_url))
+        .get(format!("{base_url}/download-url?key=images/demo.png"))
         .send()
         .await
         .unwrap();
@@ -531,8 +531,7 @@ async fn object_storage_objects_clamps_limit_and_forwards_marker() {
 
     let response = reqwest::Client::new()
         .get(format!(
-            "{}/objects?prefix=images/&marker=custom-marker&limit=5000",
-            base_url
+            "{base_url}/objects?prefix=images/&marker=custom-marker&limit=5000"
         ))
         .send()
         .await

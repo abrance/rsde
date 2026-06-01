@@ -156,12 +156,12 @@ impl MySqlClient {
         let mut conn = pool
             .get_conn()
             .await
-            .map_err(|e| format!("Failed to connect to MySQL: {}", e))?;
+            .map_err(|e| format!("Failed to connect to MySQL: {e}"))?;
 
         // Ping to verify connection
         conn.ping()
             .await
-            .map_err(|e| format!("Failed to ping MySQL: {}", e))?;
+            .map_err(|e| format!("Failed to ping MySQL: {e}"))?;
 
         Ok(Self {
             pool,
@@ -175,8 +175,8 @@ impl MySqlClient {
             .pool
             .get_conn()
             .await
-            .map_err(|e| format!("Failed to get connection: {}", e))?;
-        conn.ping().await.map_err(|e| format!("Ping failed: {}", e))
+            .map_err(|e| format!("Failed to get connection: {e}"))?;
+        conn.ping().await.map_err(|e| format!("Ping failed: {e}"))
     }
 
     /// 获取 MySQL 服务器信息
@@ -185,16 +185,16 @@ impl MySqlClient {
             .pool
             .get_conn()
             .await
-            .map_err(|e| format!("Failed to get connection: {}", e))?;
+            .map_err(|e| format!("Failed to get connection: {e}"))?;
 
         let result: Vec<(String, String)> =
             conn.exec("SHOW VARIABLES LIKE 'version%'", ())
                 .await
-                .map_err(|e| format!("Failed to get server info: {}", e))?;
+                .map_err(|e| format!("Failed to get server info: {e}"))?;
 
         let mut info = String::new();
         for (name, value) in result {
-            info.push_str(&format!("{}: {}\n", name, value));
+            info.push_str(&format!("{name}: {value}\n"));
         }
         Ok(info)
     }
@@ -205,12 +205,12 @@ impl MySqlClient {
             .pool
             .get_conn()
             .await
-            .map_err(|e| format!("Failed to get connection: {}", e))?;
+            .map_err(|e| format!("Failed to get connection: {e}"))?;
 
         let version: String = conn
             .exec_first("SELECT VERSION()", ())
             .await
-            .map_err(|e| format!("Failed to get version: {}", e))?
+            .map_err(|e| format!("Failed to get version: {e}"))?
             .ok_or_else(|| "Could not determine MySQL version".to_string())?;
 
         Ok(version)
@@ -224,11 +224,11 @@ impl MySqlClient {
             .pool
             .get_conn()
             .await
-            .map_err(|e| format!("Failed to get connection: {}", e))?;
+            .map_err(|e| format!("Failed to get connection: {e}"))?;
 
         conn.exec_drop(query, ())
             .await
-            .map_err(|e| format!("Failed to execute DDL query: {}", e))
+            .map_err(|e| format!("Failed to execute DDL query: {e}"))
     }
 
     /// 执行 DML SQL 语句（返回受影响的行数）
@@ -239,12 +239,12 @@ impl MySqlClient {
             .pool
             .get_conn()
             .await
-            .map_err(|e| format!("Failed to get connection: {}", e))?;
+            .map_err(|e| format!("Failed to get connection: {e}"))?;
 
         let result = conn
             .exec_iter(query, ())
             .await
-            .map_err(|e| format!("Failed to execute DML query: {}", e))?;
+            .map_err(|e| format!("Failed to execute DML query: {e}"))?;
 
         Ok(result.affected_rows())
     }
@@ -258,12 +258,12 @@ impl MySqlClient {
             .pool
             .get_conn()
             .await
-            .map_err(|e| format!("Failed to get connection: {}", e))?;
+            .map_err(|e| format!("Failed to get connection: {e}"))?;
 
         let result = conn
             .exec(query, ())
             .await
-            .map_err(|e| format!("Failed to execute query: {}", e))?;
+            .map_err(|e| format!("Failed to execute query: {e}"))?;
 
         Ok(result)
     }
@@ -282,12 +282,12 @@ impl MySqlClient {
             .pool
             .get_conn()
             .await
-            .map_err(|e| format!("Failed to get connection: {}", e))?;
+            .map_err(|e| format!("Failed to get connection: {e}"))?;
 
         let result = conn
             .exec(query, params)
             .await
-            .map_err(|e| format!("Failed to execute query: {}", e))?;
+            .map_err(|e| format!("Failed to execute query: {e}"))?;
 
         Ok(result)
     }
@@ -313,10 +313,10 @@ impl MySqlClient {
             .pool
             .get_conn()
             .await
-            .map_err(|e| format!("Failed to get connection: {}", e))?;
+            .map_err(|e| format!("Failed to get connection: {e}"))?;
         conn.ping()
             .await
-            .map_err(|e| format!("Connection validation failed: {}", e))
+            .map_err(|e| format!("Connection validation failed: {e}"))
     }
 
     /// 获取配置信息

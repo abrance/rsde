@@ -56,7 +56,7 @@ impl RedisClientConfig {
         } else if url_str.starts_with("redis://") {
             (url_str, false)
         } else {
-            (format!("redis://{}", url_str), false)
+            (format!("redis://{url_str}"), false)
         };
 
         Self {
@@ -114,14 +114,14 @@ impl RedisClientConfig {
                 .trim_start_matches("rediss://");
 
             let auth = match (&self.username, &self.password) {
-                (Some(user), Some(pass)) => format!("{}:{}@", user, pass),
-                (None, Some(pass)) => format!(":{}@", pass),
+                (Some(user), Some(pass)) => format!("{user}:{pass}@"),
+                (None, Some(pass)) => format!(":{pass}@"),
                 _ => String::new(),
             };
 
-            let db_suffix = self.db.map(|db| format!("/{}", db)).unwrap_or_default();
+            let db_suffix = self.db.map(|db| format!("/{db}")).unwrap_or_default();
 
-            url = format!("{}{}{}{}", scheme, auth, host_port, db_suffix);
+            url = format!("{scheme}{auth}{host_port}{db_suffix}");
         }
 
         url
@@ -142,11 +142,11 @@ impl RedisClient {
         let url = config.build_connection_url();
 
         let client =
-            Client::open(url).map_err(|e| format!("Failed to create Redis client: {}", e))?;
+            Client::open(url).map_err(|e| format!("Failed to create Redis client: {e}"))?;
 
         let connection = ConnectionManager::new(client)
             .await
-            .map_err(|e| format!("Failed to connect to Redis: {}", e))?;
+            .map_err(|e| format!("Failed to connect to Redis: {e}"))?;
 
         Ok(Self {
             connection,
@@ -159,7 +159,7 @@ impl RedisClient {
         redis::cmd("PING")
             .query_async(&mut self.connection)
             .await
-            .map_err(|e| format!("Ping failed: {}", e))
+            .map_err(|e| format!("Ping failed: {e}"))
     }
 
     /// 获取 Redis 服务器信息
@@ -170,7 +170,7 @@ impl RedisClient {
         }
         cmd.query_async(&mut self.connection)
             .await
-            .map_err(|e| format!("Failed to get INFO: {}", e))
+            .map_err(|e| format!("Failed to get INFO: {e}"))
     }
 
     /// 获取 Redis 服务器版本
@@ -189,7 +189,7 @@ impl RedisClient {
         self.connection
             .set(key, value)
             .await
-            .map_err(|e| format!("Failed to SET: {}", e))
+            .map_err(|e| format!("Failed to SET: {e}"))
     }
 
     /// 设置键值对（带过期时间）
@@ -197,7 +197,7 @@ impl RedisClient {
         self.connection
             .set_ex(key, value, seconds)
             .await
-            .map_err(|e| format!("Failed to SETEX: {}", e))
+            .map_err(|e| format!("Failed to SETEX: {e}"))
     }
 
     /// 获取键值
@@ -205,7 +205,7 @@ impl RedisClient {
         self.connection
             .get(key)
             .await
-            .map_err(|e| format!("Failed to GET: {}", e))
+            .map_err(|e| format!("Failed to GET: {e}"))
     }
 
     /// 删除键
@@ -213,7 +213,7 @@ impl RedisClient {
         self.connection
             .del(key)
             .await
-            .map_err(|e| format!("Failed to DEL: {}", e))
+            .map_err(|e| format!("Failed to DEL: {e}"))
     }
 
     /// 检查键是否存在
@@ -221,7 +221,7 @@ impl RedisClient {
         self.connection
             .exists(key)
             .await
-            .map_err(|e| format!("Failed to EXISTS: {}", e))
+            .map_err(|e| format!("Failed to EXISTS: {e}"))
     }
 
     /// 设置键的过期时间（秒）
@@ -229,7 +229,7 @@ impl RedisClient {
         self.connection
             .expire(key, seconds)
             .await
-            .map_err(|e| format!("Failed to EXPIRE: {}", e))
+            .map_err(|e| format!("Failed to EXPIRE: {e}"))
     }
 
     /// 获取键的剩余过期时间（秒）
@@ -237,7 +237,7 @@ impl RedisClient {
         self.connection
             .ttl(key)
             .await
-            .map_err(|e| format!("Failed to TTL: {}", e))
+            .map_err(|e| format!("Failed to TTL: {e}"))
     }
 
     /// 获取匹配模式的键列表
@@ -245,7 +245,7 @@ impl RedisClient {
         self.connection
             .keys(pattern)
             .await
-            .map_err(|e| format!("Failed to KEYS: {}", e))
+            .map_err(|e| format!("Failed to KEYS: {e}"))
     }
 
     /// 获取数据库中键的数量
@@ -253,7 +253,7 @@ impl RedisClient {
         redis::cmd("DBSIZE")
             .query_async(&mut self.connection)
             .await
-            .map_err(|e| format!("Failed to DBSIZE: {}", e))
+            .map_err(|e| format!("Failed to DBSIZE: {e}"))
     }
 
     /// 清空当前数据库
@@ -261,7 +261,7 @@ impl RedisClient {
         redis::cmd("FLUSHDB")
             .query_async(&mut self.connection)
             .await
-            .map_err(|e| format!("Failed to FLUSHDB: {}", e))
+            .map_err(|e| format!("Failed to FLUSHDB: {e}"))
     }
 
     /// 获取配置信息
@@ -282,7 +282,7 @@ impl RedisClient {
         command
             .query_async(&mut self.connection)
             .await
-            .map_err(|e| format!("Failed to execute command: {}", e))
+            .map_err(|e| format!("Failed to execute command: {e}"))
     }
 
     // ========== 列表操作 ==========
@@ -292,7 +292,7 @@ impl RedisClient {
         self.connection
             .lpush(key, value)
             .await
-            .map_err(|e| format!("Failed to LPUSH: {}", e))
+            .map_err(|e| format!("Failed to LPUSH: {e}"))
     }
 
     /// 从右侧推入列表
@@ -300,7 +300,7 @@ impl RedisClient {
         self.connection
             .rpush(key, value)
             .await
-            .map_err(|e| format!("Failed to RPUSH: {}", e))
+            .map_err(|e| format!("Failed to RPUSH: {e}"))
     }
 
     /// 从左侧弹出列表元素
@@ -308,7 +308,7 @@ impl RedisClient {
         self.connection
             .lpop(key, None)
             .await
-            .map_err(|e| format!("Failed to LPOP: {}", e))
+            .map_err(|e| format!("Failed to LPOP: {e}"))
     }
 
     /// 从右侧弹出列表元素
@@ -316,7 +316,7 @@ impl RedisClient {
         self.connection
             .rpop(key, None)
             .await
-            .map_err(|e| format!("Failed to RPOP: {}", e))
+            .map_err(|e| format!("Failed to RPOP: {e}"))
     }
 
     /// 获取列表范围
@@ -329,7 +329,7 @@ impl RedisClient {
         self.connection
             .lrange(key, start, stop)
             .await
-            .map_err(|e| format!("Failed to LRANGE: {}", e))
+            .map_err(|e| format!("Failed to LRANGE: {e}"))
     }
 
     /// 获取列表长度
@@ -337,7 +337,7 @@ impl RedisClient {
         self.connection
             .llen(key)
             .await
-            .map_err(|e| format!("Failed to LLEN: {}", e))
+            .map_err(|e| format!("Failed to LLEN: {e}"))
     }
 
     // ========== 哈希表操作 ==========
@@ -347,7 +347,7 @@ impl RedisClient {
         self.connection
             .hset(key, field, value)
             .await
-            .map_err(|e| format!("Failed to HSET: {}", e))
+            .map_err(|e| format!("Failed to HSET: {e}"))
     }
 
     /// 获取哈希表字段
@@ -355,7 +355,7 @@ impl RedisClient {
         self.connection
             .hget(key, field)
             .await
-            .map_err(|e| format!("Failed to HGET: {}", e))
+            .map_err(|e| format!("Failed to HGET: {e}"))
     }
 
     /// 获取哈希表所有字段和值
@@ -363,7 +363,7 @@ impl RedisClient {
         self.connection
             .hgetall(key)
             .await
-            .map_err(|e| format!("Failed to HGETALL: {}", e))
+            .map_err(|e| format!("Failed to HGETALL: {e}"))
     }
 
     /// 删除哈希表字段
@@ -371,7 +371,7 @@ impl RedisClient {
         self.connection
             .hdel(key, field)
             .await
-            .map_err(|e| format!("Failed to HDEL: {}", e))
+            .map_err(|e| format!("Failed to HDEL: {e}"))
     }
 
     // ========== 集合操作 ==========
@@ -381,7 +381,7 @@ impl RedisClient {
         self.connection
             .sadd(key, member)
             .await
-            .map_err(|e| format!("Failed to SADD: {}", e))
+            .map_err(|e| format!("Failed to SADD: {e}"))
     }
 
     /// 获取集合所有成员
@@ -389,7 +389,7 @@ impl RedisClient {
         self.connection
             .smembers(key)
             .await
-            .map_err(|e| format!("Failed to SMEMBERS: {}", e))
+            .map_err(|e| format!("Failed to SMEMBERS: {e}"))
     }
 
     /// 检查是否为集合成员
@@ -397,7 +397,7 @@ impl RedisClient {
         self.connection
             .sismember(key, member)
             .await
-            .map_err(|e| format!("Failed to SISMEMBER: {}", e))
+            .map_err(|e| format!("Failed to SISMEMBER: {e}"))
     }
 
     /// 获取集合大小
@@ -405,7 +405,7 @@ impl RedisClient {
         self.connection
             .scard(key)
             .await
-            .map_err(|e| format!("Failed to SCARD: {}", e))
+            .map_err(|e| format!("Failed to SCARD: {e}"))
     }
 }
 

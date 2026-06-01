@@ -141,3 +141,58 @@ fn latest_heartbeat_by_data_link_id_fails_when_datalink_is_missing() {
 
     assert!(err.to_string().contains("missing-datalink"));
 }
+
+#[test]
+fn latest_heartbeat_by_data_link_id_follows_logical_reapply_after_result_table_rename() {
+    let datalink_service = DataLinkService::new(MemoryDataLinkRepository::new());
+    let initial = datalink_service
+        .apply_data_link(
+            heartbeat_spec("nm_node_heartbeat_v1"),
+            ApplyDataLinkOptions {
+                idempotency_key: Some("nm-heartbeat-v1".to_string()),
+            },
+        )
+        .unwrap();
+    let updated = datalink_service
+        .apply_data_link(
+            heartbeat_spec("nm_node_heartbeat_v2"),
+            ApplyDataLinkOptions {
+                idempotency_key: Some("nm-heartbeat-v2".to_string()),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(
+        initial.data_link.data_link_id,
+        updated.data_link.data_link_id
+    );
+
+    let heartbeat_store = InMemoryHeartbeatStore::new();
+    heartbeat_store.insert(
+        "nm_node_heartbeat_v2",
+        HeartbeatSample {
+            node_id: "node-1".to_string(),
+            observed_at: Utc.with_ymd_and_hms(2026, 5, 29, 10, 5, 0).unwrap(),
+        },
+    );
+    heartbeat_store.insert(
+        "nm_node_heartbeat_v2",
+        HeartbeatSample {
+            node_id: "node-2".to_string(),
+            observed_at: Utc.with_ymd_and_hms(2026, 5, 29, 10, 6, 0).unwrap(),
+        },
+    );
+
+    let engine = QueryEngine::new(datalink_service, heartbeat_store);
+
+    let sample = engine
+        .latest_heartbeat_by_data_link_id(&initial.data_link.data_link_id, "node-1")
+        .unwrap()
+        .expect("heartbeat sample should exist after logical re-apply");
+
+    assert_eq!(sample.node_id, "node-1");
+    assert_eq!(
+        sample.observed_at,
+        Utc.with_ymd_and_hms(2026, 5, 29, 10, 5, 0).unwrap()
+    );
+}

@@ -108,11 +108,11 @@ impl ObjectStorageConfig {
         }
 
         if !self.bucket_is_private {
-            let has_domain = self.domain.as_ref().map_or(false, |d| !d.trim().is_empty());
+            let has_domain = self.domain.as_ref().is_some_and(|d| !d.trim().is_empty());
             let has_public_base_url = self
                 .public_base_url
                 .as_ref()
-                .map_or(false, |u| !u.trim().is_empty());
+                .is_some_and(|u| !u.trim().is_empty());
 
             if !has_domain && !has_public_base_url {
                 return Err(anyhow::anyhow!(

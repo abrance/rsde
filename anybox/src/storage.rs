@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
 use redis::{AsyncCommands, aio::ConnectionManager};
-use serde::Serialize;
 use std::fmt::Debug;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 use crate::models::{PaginatedResult, PaginationParams, TextBox};
 
@@ -238,7 +237,7 @@ impl TextBoxManager {
             .context("检查 TextBox 是否存在失败")?;
 
         if !exists {
-            anyhow::bail!("TextBox 不存在: id={}", id);
+            anyhow::bail!("TextBox 不存在: id={id}");
         }
 
         // 序列化并保存
@@ -267,12 +266,11 @@ impl TextBoxManager {
         let mut deleted_count = 0;
 
         for id in ids {
-            if let Ok(Some(text_box)) = self.get_without_increment(&id).await {
-                if text_box.is_expired() {
-                    if self.delete(&id).await? {
-                        deleted_count += 1;
-                    }
-                }
+            if let Ok(Some(text_box)) = self.get_without_increment(&id).await
+                && text_box.is_expired()
+                && self.delete(&id).await?
+            {
+                deleted_count += 1;
             }
         }
 
@@ -287,7 +285,7 @@ impl TextBoxManager {
     pub async fn stats(&mut self) -> Result<TextBoxStats> {
         let total: u64 = self
             .conn
-            .zcard(&self.index_key())
+            .zcard(self.index_key())
             .await
             .context("获取总数失败")?;
 
@@ -312,7 +310,7 @@ pub struct TextBoxStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{TextBox, TextFormat};
+    use crate::models::TextBox;
 
     async fn create_test_manager() -> Result<TextBoxManager> {
         let config = RedisConfig::default().with_prefix("anybox_test".to_string());
@@ -328,7 +326,7 @@ mod tests {
             .with_title("Test".to_string());
 
         let id = text_box.id.clone();
-        let created = manager.create(text_box).await?;
+        let _created = manager.create(text_box).await?;
 
         let fetched = manager.get(&id).await?;
         assert!(fetched.is_some());

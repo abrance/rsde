@@ -6,7 +6,10 @@ use config::mysql::MysqlConfig;
 use mysql_async::{Pool, Row, params, prelude::*};
 use tokio::sync::Mutex;
 
-use crate::{Node, NodeManageError, NodeStatus, PaginatedResult, PaginationParams, Result};
+use crate::{
+    BindingState, Node, NodeAgentBinding, NodeManageError, NodeStatus, PaginatedResult,
+    PaginationParams, Result,
+};
 
 #[async_trait]
 pub trait NodeRepository: Clone + Send + Sync + 'static {
@@ -15,11 +18,18 @@ pub trait NodeRepository: Clone + Send + Sync + 'static {
     async fn list(&self, pagination: PaginationParams) -> Result<PaginatedResult<Node>>;
     async fn update(&self, node: Node) -> Result<Node>;
     async fn delete(&self, id: &str) -> Result<bool>;
+    async fn upsert_agent_binding(&self, binding: NodeAgentBinding) -> Result<NodeAgentBinding>;
+    async fn agent_binding_by_agent_id(&self, agent_id: &str) -> Result<Option<NodeAgentBinding>>;
+    async fn bound_agent_binding_by_node_id(
+        &self,
+        node_id: &str,
+    ) -> Result<Option<NodeAgentBinding>>;
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct MemoryNodeRepository {
     nodes: Arc<Mutex<HashMap<String, Node>>>,
+    bindings: Arc<Mutex<HashMap<String, NodeAgentBinding>>>,
 }
 
 #[async_trait]
@@ -62,12 +72,37 @@ impl NodeRepository for MemoryNodeRepository {
         let mut nodes = self.nodes.lock().await;
         Ok(nodes.remove(id).is_some())
     }
+
+    async fn upsert_agent_binding(&self, binding: NodeAgentBinding) -> Result<NodeAgentBinding> {
+        let mut bindings = self.bindings.lock().await;
+        bindings.insert(binding.agent_id.clone(), binding.clone());
+        Ok(binding)
+    }
+
+    async fn agent_binding_by_agent_id(&self, agent_id: &str) -> Result<Option<NodeAgentBinding>> {
+        let bindings = self.bindings.lock().await;
+        Ok(bindings.get(agent_id).cloned())
+    }
+
+    async fn bound_agent_binding_by_node_id(
+        &self,
+        node_id: &str,
+    ) -> Result<Option<NodeAgentBinding>> {
+        let bindings = self.bindings.lock().await;
+        Ok(bindings
+            .values()
+            .find(|binding| {
+                binding.node_id == node_id && binding.binding_state == BindingState::Bound
+            })
+            .cloned())
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct MySqlNodeRepository {
     pool: Pool,
     table_name: String,
+    binding_table_name: String,
 }
 
 impl MySqlNodeRepository {
@@ -76,7 +111,8 @@ impl MySqlNodeRepository {
             .map_err(|err| NodeManageError::Storage(err.to_string()))?;
         let repository = Self {
             pool: Pool::new(opts),
-            table_name: format!("{}nodes", table_prefix),
+            table_name: format!("{table_prefix}nodes"),
+            binding_table_name: format!("{table_prefix}agent_bindings"),
         };
         repository.init_table().await?;
         Ok(repository)
@@ -84,7 +120,7 @@ impl MySqlNodeRepository {
 
     async fn init_table(&self) -> Result<()> {
         let mut conn = self.connection().await?;
-        let create_table_sql = format!(
+        let create_nodes_table_sql = format!(
             r#"CREATE TABLE IF NOT EXISTS `{}` (
                 `id` VARCHAR(36) NOT NULL PRIMARY KEY,
                 `name` VARCHAR(255) NOT NULL,
@@ -99,7 +135,24 @@ impl MySqlNodeRepository {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"#,
             self.table_name
         );
-        conn.query_drop(create_table_sql)
+        conn.query_drop(create_nodes_table_sql)
+            .await
+            .map_err(|err| NodeManageError::Storage(err.to_string()))?;
+
+        let create_bindings_table_sql = format!(
+            r#"CREATE TABLE IF NOT EXISTS `{}` (
+                `agent_id` VARCHAR(255) NOT NULL PRIMARY KEY,
+                `node_id` VARCHAR(255) NOT NULL,
+                `binding_state` VARCHAR(32) NOT NULL,
+                `first_registered_at` DATETIME NOT NULL,
+                `last_handshake_at` DATETIME NOT NULL,
+                `unbind_reason` TEXT NULL,
+                INDEX `idx_node_binding_state` (`node_id`, `binding_state`),
+                INDEX `idx_last_handshake_at` (`last_handshake_at`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"#,
+            self.binding_table_name
+        );
+        conn.query_drop(create_bindings_table_sql)
             .await
             .map_err(|err| NodeManageError::Storage(err.to_string()))?;
         Ok(())
@@ -150,10 +203,58 @@ impl MySqlNodeRepository {
         })
     }
 
+    fn binding_state_as_str(binding_state: &BindingState) -> &'static str {
+        match binding_state {
+            BindingState::Bound => "bound",
+            BindingState::Stale => "stale",
+            BindingState::Unbound => "unbound",
+        }
+    }
+
+    fn row_to_binding(&self, row: Row) -> Result<NodeAgentBinding> {
+        let (
+            agent_id,
+            node_id,
+            binding_state,
+            first_registered_at,
+            last_handshake_at,
+            unbind_reason,
+        ): (
+            String,
+            String,
+            String,
+            NaiveDateTime,
+            NaiveDateTime,
+            Option<String>,
+        ) = mysql_async::from_row(row);
+
+        Ok(NodeAgentBinding {
+            node_id,
+            agent_id,
+            binding_state: match binding_state.as_str() {
+                "bound" => BindingState::Bound,
+                "stale" => BindingState::Stale,
+                "unbound" => BindingState::Unbound,
+                _ => {
+                    return Err(NodeManageError::Storage(format!(
+                        "unknown binding state: {binding_state}"
+                    )));
+                }
+            },
+            first_registered_at: DateTime::from_naive_utc_and_offset(first_registered_at, Utc),
+            last_handshake_at: DateTime::from_naive_utc_and_offset(last_handshake_at, Utc),
+            unbind_reason,
+        })
+    }
+
     pub async fn reset_for_tests(&self) -> Result<()> {
         let mut conn = self.connection().await?;
-        let drop_table_sql = format!("DROP TABLE IF EXISTS `{}`", self.table_name);
-        conn.query_drop(drop_table_sql)
+        let drop_bindings_table_sql = format!("DROP TABLE IF EXISTS `{}`", self.binding_table_name);
+        conn.query_drop(drop_bindings_table_sql)
+            .await
+            .map_err(|err| NodeManageError::Storage(err.to_string()))?;
+        let drop_nodes_table_sql = format!("DROP TABLE IF EXISTS `{}`", self.table_name);
+        conn.query_drop(drop_nodes_table_sql)
             .await
             .map_err(|err| NodeManageError::Storage(err.to_string()))?;
         self.init_table().await
@@ -292,5 +393,65 @@ impl NodeRepository for MySqlNodeRepository {
             .await
             .map_err(|err| NodeManageError::Storage(err.to_string()))?;
         Ok(result.affected_rows() > 0)
+    }
+
+    async fn upsert_agent_binding(&self, binding: NodeAgentBinding) -> Result<NodeAgentBinding> {
+        let mut conn = self.connection().await?;
+        let upsert_sql = format!(
+            r#"INSERT INTO `{}` (
+                   agent_id, node_id, binding_state, first_registered_at, last_handshake_at, unbind_reason
+               ) VALUES (
+                   :agent_id, :node_id, :binding_state, :first_registered_at, :last_handshake_at, :unbind_reason
+               ) ON DUPLICATE KEY UPDATE
+                   node_id = VALUES(node_id),
+                   binding_state = VALUES(binding_state),
+                   first_registered_at = VALUES(first_registered_at),
+                   last_handshake_at = VALUES(last_handshake_at),
+                   unbind_reason = VALUES(unbind_reason)"#,
+            self.binding_table_name
+        );
+        conn.exec_drop(
+            upsert_sql,
+            params! {
+                "agent_id" => &binding.agent_id,
+                "node_id" => &binding.node_id,
+                "binding_state" => Self::binding_state_as_str(&binding.binding_state),
+                "first_registered_at" => binding.first_registered_at.naive_utc(),
+                "last_handshake_at" => binding.last_handshake_at.naive_utc(),
+                "unbind_reason" => &binding.unbind_reason,
+            },
+        )
+        .await
+        .map_err(|err| NodeManageError::Storage(err.to_string()))?;
+        Ok(binding)
+    }
+
+    async fn agent_binding_by_agent_id(&self, agent_id: &str) -> Result<Option<NodeAgentBinding>> {
+        let mut conn = self.connection().await?;
+        let select_sql = format!(
+            "SELECT agent_id, node_id, binding_state, first_registered_at, last_handshake_at, unbind_reason FROM `{}` WHERE agent_id = :agent_id",
+            self.binding_table_name
+        );
+        let row = conn
+            .exec_first(select_sql, params! { "agent_id" => agent_id })
+            .await
+            .map_err(|err| NodeManageError::Storage(err.to_string()))?;
+        row.map(|value| self.row_to_binding(value)).transpose()
+    }
+
+    async fn bound_agent_binding_by_node_id(
+        &self,
+        node_id: &str,
+    ) -> Result<Option<NodeAgentBinding>> {
+        let mut conn = self.connection().await?;
+        let select_sql = format!(
+            "SELECT agent_id, node_id, binding_state, first_registered_at, last_handshake_at, unbind_reason FROM `{}` WHERE node_id = :node_id AND binding_state = 'bound' ORDER BY last_handshake_at DESC, agent_id DESC LIMIT 1",
+            self.binding_table_name
+        );
+        let row = conn
+            .exec_first(select_sql, params! { "node_id" => node_id })
+            .await
+            .map_err(|err| NodeManageError::Storage(err.to_string()))?;
+        row.map(|value| self.row_to_binding(value)).transpose()
     }
 }

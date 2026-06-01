@@ -12,6 +12,7 @@ pub mod object_storage;
 pub mod ocr;
 pub mod prompt;
 pub mod redis;
+pub mod rsagent;
 pub mod rsync;
 
 use serde::{Deserialize, Serialize};

@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -41,7 +43,7 @@ impl TextFormat {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "plain" => Some(Self::Plain),
             "markdown" | "md" => Some(Self::Markdown),
@@ -52,6 +54,14 @@ impl TextFormat {
             "yaml" | "yml" => Some(Self::Yaml),
             _ => None,
         }
+    }
+}
+
+impl FromStr for TextFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s).ok_or_else(|| format!("unsupported text format: {s}"))
     }
 }
 
@@ -214,7 +224,7 @@ impl PaginationParams {
     pub fn new(page: u32, page_size: u32) -> Self {
         Self {
             page: page.max(1),
-            page_size: page_size.min(100).max(1),
+            page_size: page_size.clamp(1, 100),
         }
     }
 
@@ -260,6 +270,14 @@ impl<T> PaginatedResult<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_text_format_parse_aliases() {
+        assert_eq!("plain".parse::<TextFormat>().unwrap(), TextFormat::Plain);
+        assert_eq!("md".parse::<TextFormat>().unwrap(), TextFormat::Markdown);
+        assert_eq!("YML".parse::<TextFormat>().unwrap(), TextFormat::Yaml);
+        assert!("unknown".parse::<TextFormat>().is_err());
+    }
 
     #[test]
     fn test_text_box_creation() {

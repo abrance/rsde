@@ -324,7 +324,7 @@ pub fn ensure_directory_marker(key: &str) -> Result<String> {
     if normalized.ends_with('/') {
         Ok(normalized)
     } else {
-        Ok(format!("{}/", normalized))
+        Ok(format!("{normalized}/"))
     }
 }
 
@@ -337,7 +337,7 @@ pub fn join_directory_marker(prefix: &str, key: &str) -> String {
     if prefix.is_empty() {
         key.to_string()
     } else {
-        let joined = format!("{}/{}", prefix, key);
+        let joined = format!("{prefix}/{key}");
         collapse_slashes(&joined)
     }
 }
@@ -353,12 +353,11 @@ pub fn apply_path_prefix_constraint(key: &str, prefix: &str) -> Result<()> {
         return Ok(());
     }
 
-    if key == prefix || key.starts_with(&format!("{}/", prefix)) {
+    if key == prefix || key.starts_with(&format!("{prefix}/")) {
         Ok(())
     } else {
         Err(ObjectStorageError::InvalidInput(format!(
-            "Key '{}' does not respect path_prefix '{}'",
-            key, prefix
+            "Key '{key}' does not respect path_prefix '{prefix}'"
         )))
     }
 }
@@ -376,7 +375,7 @@ pub fn strip_path_prefix_for_response(key: &str, prefix: &str) -> String {
 
     if key == prefix {
         String::new()
-    } else if key.starts_with(&format!("{}/", prefix)) {
+    } else if key.starts_with(&format!("{prefix}/")) {
         key[prefix.len() + 1..].to_string()
     } else {
         key.to_string()

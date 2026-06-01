@@ -1,6 +1,7 @@
 use nodemanage::{
-    AgentRegistration, CreateNode, InstallNodeRequest, InstallPlugin, InstallStatus,
-    MemoryNodeRepository, Node, NodeRepository, NodeStatus, PaginationParams,
+    AgentRegistration, BindingState, CreateNode, InstallNodeRequest, InstallPlugin, InstallStatus,
+    MemoryNodeRepository, Node, NodeAgentBinding, NodeRepository, NodeStatus, NodeStatusSnapshot,
+    OnlineStatus, PaginationParams,
 };
 
 #[test]
@@ -142,4 +143,90 @@ fn install_status_serializes_supported_states() {
     assert_eq!(InstallStatus::WaitingRegister.as_str(), "waiting_register");
     assert_eq!(InstallStatus::Registered.as_str(), "registered");
     assert_eq!(InstallStatus::Failed.as_str(), "failed");
+}
+
+#[test]
+fn node_identity_is_independent_of_agent_bindings() {
+    let node = Node::new(
+        "worker-1".to_string(),
+        "http://worker-1:8080".to_string(),
+        vec!["gpu".to_string()],
+    );
+    let node_id = node.id.clone();
+
+    let binding = NodeAgentBinding::new(node_id.clone(), "agent-abc".to_string());
+
+    assert_eq!(binding.node_id, node.id);
+    assert_ne!(binding.agent_id, node.id);
+    assert_eq!(binding.binding_state, BindingState::Bound);
+}
+
+#[test]
+fn node_agent_binding_records_registration_timestamps() {
+    let binding = NodeAgentBinding::new("node-1".to_string(), "agent-1".to_string());
+
+    assert_eq!(binding.node_id, "node-1");
+    assert_eq!(binding.agent_id, "agent-1");
+    assert_eq!(binding.binding_state, BindingState::Bound);
+    assert!(binding.first_registered_at <= binding.last_handshake_at);
+    assert!(binding.unbind_reason.is_none());
+}
+
+#[test]
+fn one_node_can_have_multiple_agent_bindings() {
+    let node_id = "node-1".to_string();
+
+    let binding_a = NodeAgentBinding::new(node_id.clone(), "agent-1".to_string());
+    let binding_b = NodeAgentBinding::new(node_id.clone(), "agent-2".to_string());
+
+    assert_eq!(binding_a.node_id, binding_b.node_id);
+    assert_ne!(binding_a.agent_id, binding_b.agent_id);
+
+    let bindings = vec![binding_a, binding_b];
+    assert_eq!(bindings.len(), 2);
+
+    let bound_count = bindings
+        .iter()
+        .filter(|b| b.binding_state == BindingState::Bound)
+        .count();
+    assert_eq!(bound_count, 2);
+}
+
+#[test]
+fn binding_state_transitions_are_explicit() {
+    let mut binding = NodeAgentBinding::new("node-1".to_string(), "agent-1".to_string());
+    assert_eq!(binding.binding_state, BindingState::Bound);
+
+    binding.binding_state = BindingState::Stale;
+    assert_eq!(binding.binding_state, BindingState::Stale);
+
+    binding.binding_state = BindingState::Unbound;
+    binding.unbind_reason = Some("agent-restarted".to_string());
+    assert_eq!(binding.binding_state, BindingState::Unbound);
+    assert!(binding.unbind_reason.is_some());
+}
+
+#[test]
+fn node_status_snapshot_is_a_read_model() {
+    let snapshot = NodeStatusSnapshot::new("node-1".to_string(), OnlineStatus::Online, None);
+
+    assert_eq!(snapshot.node_id, "node-1");
+    assert_eq!(snapshot.online_status, OnlineStatus::Online);
+    assert!(snapshot.status_reason.is_none());
+    assert!(snapshot.aggregated_at <= chrono::Utc::now());
+}
+
+#[test]
+fn node_status_snapshot_can_be_offline_with_reason() {
+    let snapshot = NodeStatusSnapshot::new(
+        "node-1".to_string(),
+        OnlineStatus::Offline,
+        Some("no heartbeat for 5 minutes".to_string()),
+    );
+
+    assert_eq!(snapshot.online_status, OnlineStatus::Offline);
+    assert_eq!(
+        snapshot.status_reason,
+        Some("no heartbeat for 5 minutes".to_string())
+    );
 }

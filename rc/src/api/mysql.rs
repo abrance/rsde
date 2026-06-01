@@ -108,10 +108,10 @@ async fn ping_mysql(
     };
 
     // Parse port from host if present
-    if let Some(pos) = req.host.find(':') {
-        if let Ok(port) = req.host[pos + 1..].parse() {
-            result.port = port;
-        }
+    if let Some(pos) = req.host.find(':')
+        && let Ok(port) = req.host[pos + 1..].parse()
+    {
+        result.port = port;
     }
 
     let mut client = match MySqlClient::new(&config).await {
@@ -198,7 +198,21 @@ async fn query_mysql(
                 Err((StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)))
             }
         },
-        "dml" | _ => match client.execute_dml(&req.query).await {
+        "dml" => match client.execute_dml(&req.query).await {
+            Ok(rows_affected) => {
+                let response = serde_json::json!({
+                    "success": true,
+                    "rows_affected": rows_affected
+                });
+                Ok(Json(response))
+            }
+            Err(e) => {
+                let error_response = serde_json::json!({"error": e});
+                error!("mysql dml query fail: {}", e);
+                Err((StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)))
+            }
+        },
+        _ => match client.execute_dml(&req.query).await {
             Ok(rows_affected) => {
                 let response = serde_json::json!({
                     "success": true,

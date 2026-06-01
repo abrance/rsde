@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use config::rsagent::AgentRuntimeConfig;
 use serde::{Deserialize, Serialize};
 use std::{process::Stdio, sync::Arc};
 use tokio::{
@@ -14,7 +15,7 @@ fn default_install_root() -> String {
 }
 
 fn default_register_callback_url() -> String {
-    "http://127.0.0.1:3000/api/nodes/agent/register".to_string()
+    "http://127.0.0.1:3000/agent/sync".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -68,34 +69,29 @@ impl SshConnectionRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallRuntimeConfig {
-    pub install_root: String,
-    pub register_callback_url: String,
+    pub runtime: AgentRuntimeConfig,
 }
 
 impl InstallRuntimeConfig {
     pub fn new(install_root: String, register_callback_url: String) -> Self {
+        let nodemanage_sync_url = normalize_sync_url(&register_callback_url);
         Self {
-            install_root,
-            register_callback_url,
+            runtime: AgentRuntimeConfig::installer_bootstrap(nodemanage_sync_url, install_root),
         }
     }
 
     pub fn render(&self) -> Result<String> {
-        toml::to_string(self).map_err(|err| crate::NodeManageError::Storage(err.to_string()))
+        toml::to_string(&self.runtime)
+            .map_err(|err| crate::NodeManageError::Storage(err.to_string()))
     }
 }
 
-impl Serialize for InstallRuntimeConfig {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeMap;
-        let mut map = serializer.serialize_map(Some(2))?;
-        map.serialize_entry("install_root", &self.install_root)?;
-        map.serialize_entry("register_callback_url", &self.register_callback_url)?;
-        map.end()
-    }
+fn normalize_sync_url(raw: &str) -> String {
+    raw.trim_end_matches("/")
+        .strip_suffix("/api/nodes/agent/register")
+        .or_else(|| raw.trim_end_matches("/").strip_suffix("/agent/sync"))
+        .unwrap_or(raw.trim_end_matches('/'))
+        .to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,36 +196,31 @@ impl ShellRemoteExecutor {
         for step in steps {
             match step {
                 InstallStep::EnsureDirectory(path) => {
-                    lines.push(format!("mkdir -p '{}'", path));
+                    lines.push(format!("mkdir -p '{path}'"));
                 }
                 InstallStep::DownloadRsAgent(url) => {
                     lines.push(format!(
-                        "curl -fsSL '{}' -o '{}/bin/rsagent-package'",
-                        url, install_root
+                        "curl -fsSL '{url}' -o '{install_root}/bin/rsagent-package'"
                     ));
                 }
                 InstallStep::DownloadPlugin { name, package_url } => {
                     lines.push(format!(
-                        "curl -fsSL '{}' -o '{}/plugin/{}-plugin-package'",
-                        package_url, install_root, name
+                        "curl -fsSL '{package_url}' -o '{install_root}/plugin/{name}-plugin-package'"
                     ));
                 }
                 InstallStep::WriteRuntimeConfig => {
                     lines.push(format!(
-                        "cat > '{}/config/rsagent.toml' <<'EOF'\n{}\nEOF",
-                        install_root, runtime_config
+                        "cat > '{install_root}/config/rsagent.toml' <<'EOF'\n{runtime_config}\nEOF"
                     ));
                 }
                 InstallStep::WriteInstallConf => {
                     lines.push(format!(
-                        "cat > '{}/install.conf' <<'EOF'\n{}\nEOF",
-                        install_root, install_conf
+                        "cat > '{install_root}/install.conf' <<'EOF'\n{install_conf}\nEOF"
                     ));
                 }
                 InstallStep::StartAgent => {
                     lines.push(format!(
-                        "if [ -x '{0}/bin/rsagent' ]; then '{0}/bin/rsagent' --config '{0}/config/rsagent.toml' >/tmp/rsagent.log 2>&1 & fi",
-                        install_root
+                        "if [ -x '{install_root}/bin/rsagent' ]; then '{install_root}/bin/rsagent' --config '{install_root}/config/rsagent.toml' >/tmp/rsagent.log 2>&1 & fi"
                     ));
                 }
             }
