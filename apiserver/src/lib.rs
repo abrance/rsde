@@ -1,6 +1,7 @@
 pub mod anybox;
 pub mod datalink_engine;
 pub mod image;
+pub mod job_manage;
 pub mod nodemanage;
 pub mod object_storage;
 pub mod ocr;
@@ -37,7 +38,11 @@ pub async fn build_api_app(global_config: GlobalConfig) -> anyhow::Result<Router
             ocr::create_routes(remote_ocr_config, image_hosting_config.storage_dir.clone()),
         )
         .nest("/api/image", image::create_routes(image_hosting_config))
-        .nest("/api/rc", rc::create_routes());
+        .nest("/api/rc", rc::create_routes())
+        .nest(
+            "/api/job-manage/v1",
+            job_manage::create_routes(::job_manage::TaskSyncService::new(vec![])),
+        );
 
     if let Some(anybox_cfg) = anybox_config {
         let anybox_routes = anybox::create_routes(anybox_cfg).await?;

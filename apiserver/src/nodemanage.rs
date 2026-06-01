@@ -10,10 +10,10 @@ use datalink_engine::{
     DataSourceInput, DataType, EtlMode, EtlPipelineInput, ResultTableInput, StorageType,
 };
 use nodemanage::{
-    AgentRegistration, CreateNode, InstallNodeRequest, InstallPlugin, MemoryNodeRepository,
-    MySqlNodeRepository, Node, NodeManageError, NodeManager, NodeStatus, NoopRsAgentInstaller,
-    PaginatedResult, PaginationParams, RemoteExecutor, RepositoryRegistrationWaiter,
-    ShellRemoteExecutor, SshRsAgentInstaller, UpdateNode,
+    AgentSyncRequest, AgentSyncResponse, CreateNode, InstallNodeRequest, InstallPlugin,
+    MemoryNodeRepository, MySqlNodeRepository, Node, NodeManageError, NodeManager, NodeStatus,
+    NoopRsAgentInstaller, PaginatedResult, PaginationParams, RemoteExecutor,
+    RepositoryRegistrationWaiter, ShellRemoteExecutor, SshRsAgentInstaller, UpdateNode,
 };
 use query_engine::{InMemoryHeartbeatStore, QueryEngine};
 use serde::{Deserialize, Serialize};
@@ -96,10 +96,13 @@ impl AppNodeManager {
         }
     }
 
-    async fn register_agent(&self, req: AgentRegistration) -> Result<Node, NodeManageError> {
+    async fn sync_agent(
+        &self,
+        req: AgentSyncRequest,
+    ) -> Result<AgentSyncResponse, NodeManageError> {
         match self {
-            Self::Memory(manager) => manager.register_agent(req).await,
-            Self::Mysql(manager) => manager.register_agent(req).await,
+            Self::Memory(manager) => manager.sync_agent(req).await,
+            Self::Mysql(manager) => manager.sync_agent(req).await,
         }
     }
 }
@@ -216,10 +219,10 @@ pub fn apply_install_request_defaults(
     config: &config::nodemanage::NodeManageConfig,
     mut request: InstallNodeRequest,
 ) -> InstallNodeRequest {
-    if request.rsagent_package_url.is_empty() {
-        if let Some(url) = &config.rsagent_package_url {
-            request.rsagent_package_url = url.clone();
-        }
+    if request.rsagent_package_url.is_empty()
+        && let Some(url) = &config.rsagent_package_url
+    {
+        request.rsagent_package_url = url.clone();
     }
 
     if request.install_root.is_empty() {
@@ -293,6 +296,15 @@ pub struct InstallNodeResponse {
     pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<nodemanage::InstallNodeResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentSyncHttpResponse {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<AgentSyncResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -546,22 +558,40 @@ async fn install_node(
         })
 }
 
-async fn register_agent(
+async fn sync_agent(
     State(state): State<NodeManageState>,
-    Json(req): Json<AgentRegistration>,
-) -> Result<Json<NodeResponse>, (StatusCode, Json<NodeResponse>)> {
+    Json(req): Json<AgentSyncRequest>,
+) -> Result<Json<AgentSyncHttpResponse>, (StatusCode, Json<AgentSyncHttpResponse>)> {
     state
         .manager
-        .register_agent(req)
+        .sync_agent(req)
         .await
-        .map(|node| {
-            Json(NodeResponse {
+        .map(|mut response| {
+            if let Some(heartbeat_data_link_id) = state.heartbeat_data_link_id.as_ref() {
+                response.heartbeat_config.data_link_id = heartbeat_data_link_id.clone();
+                response.heartbeat_config.interval_secs = state.config.heartbeat.interval_seconds;
+            }
+            Json(AgentSyncHttpResponse {
                 success: true,
-                data: Some(node),
+                data: Some(response),
                 error: None,
             })
         })
-        .map_err(node_error)
+        .map_err(|error| {
+            let status = match error {
+                NodeManageError::NotFound(_) => StatusCode::NOT_FOUND,
+                NodeManageError::InvalidInput(_) => StatusCode::BAD_REQUEST,
+                NodeManageError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            (
+                status,
+                Json(AgentSyncHttpResponse {
+                    success: false,
+                    data: None,
+                    error: Some(error.to_string()),
+                }),
+            )
+        })
 }
 
 pub async fn create_routes(config: config::nodemanage::NodeManageConfig) -> anyhow::Result<Router> {
@@ -591,6 +621,6 @@ fn build_router(state: NodeManageState) -> Router {
         .route("/node/:id/status", patch(update_status))
         .route("/node/:id/status/refresh", post(refresh_status))
         .route("/install", post(install_node))
-        .route("/agent/register", post(register_agent))
+        .route("/agent/sync", post(sync_agent))
         .with_state(state)
 }
