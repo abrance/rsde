@@ -1,8 +1,8 @@
 use chrono::{Duration, Utc};
 use config::mysql::MysqlConfig;
 use nodemanage::{
-    AgentRegistration, MySqlNodeRepository, Node, NodeManager, NodeRepository, NodeStatus,
-    NoopRsAgentInstaller, PaginationParams,
+    AgentRegistration, BindingState, MySqlNodeRepository, Node, NodeAgentBinding, NodeManager,
+    NodeRepository, NodeStatus, NoopRsAgentInstaller, PaginationParams,
 };
 use std::env;
 use uuid::Uuid;
@@ -153,4 +153,70 @@ async fn mysql_repository_supports_idempotent_agent_registration_flow() {
         listed.items[0].labels,
         vec!["edge".to_string(), "gpu".to_string()]
     );
+}
+
+#[tokio::test]
+#[ignore = "requires reachable MySQL test environment; run with --ignored and MYSQL_* overrides if needed"]
+async fn mysql_repository_persists_and_loads_agent_bindings() {
+    let repository = test_repository().await;
+    let mut binding =
+        NodeAgentBinding::new("node-mysql-1".to_string(), "agent-mysql-1".to_string());
+    binding.binding_state = BindingState::Bound;
+
+    repository
+        .upsert_agent_binding(binding.clone())
+        .await
+        .unwrap();
+
+    let by_agent = repository
+        .agent_binding_by_agent_id(&binding.agent_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let by_node = repository
+        .bound_agent_binding_by_node_id(&binding.node_id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(by_agent, binding);
+    assert_eq!(by_node, binding);
+}
+
+#[tokio::test]
+#[ignore = "requires reachable MySQL test environment; run with --ignored and MYSQL_* overrides if needed"]
+async fn mysql_repository_keeps_stale_history_while_loading_only_current_bound_binding() {
+    let repository = test_repository().await;
+
+    let mut stale_binding =
+        NodeAgentBinding::new("node-mysql-1".to_string(), "agent-mysql-old".to_string());
+    stale_binding.binding_state = BindingState::Stale;
+    stale_binding.unbind_reason = Some("rotated".to_string());
+
+    let bound_binding =
+        NodeAgentBinding::new("node-mysql-1".to_string(), "agent-mysql-new".to_string());
+
+    repository
+        .upsert_agent_binding(stale_binding.clone())
+        .await
+        .unwrap();
+    repository
+        .upsert_agent_binding(bound_binding.clone())
+        .await
+        .unwrap();
+
+    let by_node = repository
+        .bound_agent_binding_by_node_id("node-mysql-1")
+        .await
+        .unwrap()
+        .unwrap();
+    let stale = repository
+        .agent_binding_by_agent_id("agent-mysql-old")
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(by_node, bound_binding);
+    assert_eq!(stale.binding_state, BindingState::Stale);
+    assert_eq!(stale.unbind_reason, Some("rotated".to_string()));
 }

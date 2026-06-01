@@ -5,14 +5,22 @@ use datalink_engine::{
     storage::memory::MemoryDataLinkRepository,
 };
 use nodemanage::{
-    AgentRegistration, CreateNode, InstallNodeRequest, InstallStatus, MemoryNodeRepository,
-    NodeManageError, NodeManager, NodeStatus, NoopRsAgentInstaller, PaginationParams, UpdateNode,
+    AgentRegistration, AgentRunMode, AgentSyncRequest, BindingState, CreateNode, HeartbeatConfig,
+    InstallNodeRequest, InstallStatus, JobManageConfig, MemoryNodeRepository, NodeManageError,
+    NodeManager, NodeStatus, NoopRsAgentInstaller, OnlineStatus, PaginationParams,
+    SyncBindingState, TaskFilterDefaults, UpdateNode,
 };
 use query_engine::{HeartbeatSample, InMemoryHeartbeatStore, QueryEngine};
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 fn manager() -> NodeManager<MemoryNodeRepository, NoopRsAgentInstaller> {
     NodeManager::new(MemoryNodeRepository::default(), NoopRsAgentInstaller)
+}
+
+fn manager_with_repository(
+    repository: MemoryNodeRepository,
+) -> NodeManager<MemoryNodeRepository, NoopRsAgentInstaller> {
+    NodeManager::new(repository, NoopRsAgentInstaller)
 }
 
 fn heartbeat_spec(result_table_name: &str) -> ApplyDataLinkSpec {
@@ -50,6 +58,25 @@ fn heartbeat_spec(result_table_name: &str) -> ApplyDataLinkSpec {
             schema: HashMap::new(),
             retention_days: Some(7),
         },
+    }
+}
+
+fn sync_request(
+    agent_id: &str,
+    node_id: Option<&str>,
+    config_version: Option<&str>,
+) -> AgentSyncRequest {
+    AgentSyncRequest {
+        agent_id: agent_id.to_string(),
+        node_id: node_id.map(ToString::to_string),
+        agent_version: "0.1.0".to_string(),
+        hostname: format!("{agent_id}.example.internal"),
+        os_family: "linux".to_string(),
+        os_distribution: "ubuntu".to_string(),
+        arch: "x86_64".to_string(),
+        capabilities: vec!["heartbeat".to_string(), "task-sync".to_string()],
+        started_at: Utc.with_ymd_and_hms(2026, 5, 29, 10, 0, 0).unwrap(),
+        config_version: config_version.map(ToString::to_string),
     }
 }
 
@@ -206,6 +233,172 @@ async fn register_agent_is_idempotent_for_same_agent_id() {
     );
     assert_eq!(nodes.total, 1);
     assert_eq!(nodes.items[0].id, "agent-1");
+}
+
+#[tokio::test]
+async fn sync_first_sync_creates_binding_and_returns_active_config() {
+    let manager = manager();
+
+    let response = manager
+        .sync_agent(sync_request("agent-1", Some("node-1"), None))
+        .await
+        .unwrap();
+    let binding = manager.agent_binding("agent-1").await.unwrap();
+
+    assert!(response.accepted);
+    assert_eq!(response.agent_id, "agent-1");
+    assert_eq!(response.bound_node_id, "node-1");
+    assert_eq!(response.binding_state, SyncBindingState::Bound);
+    assert_eq!(response.agent_run_mode, AgentRunMode::Active);
+    assert_eq!(response.config_version, "2026-05-29T10:00:00Z");
+    assert_eq!(binding.agent_id, "agent-1");
+    assert_eq!(binding.node_id, "node-1");
+    assert_eq!(binding.binding_state, BindingState::Bound);
+}
+
+#[tokio::test]
+async fn sync_later_sync_refreshes_handshake_and_config() {
+    let manager = manager();
+
+    manager
+        .sync_agent(sync_request("agent-1", Some("node-1"), None))
+        .await
+        .unwrap();
+    let first_binding = manager.agent_binding("agent-1").await.unwrap();
+
+    tokio::time::sleep(Duration::from_millis(5)).await;
+
+    let response = manager
+        .sync_agent(sync_request(
+            "agent-1",
+            Some("node-1"),
+            Some("stale-config-version"),
+        ))
+        .await
+        .unwrap();
+    let refreshed_binding = manager.agent_binding("agent-1").await.unwrap();
+
+    assert!(response.accepted);
+    assert_eq!(response.bound_node_id, "node-1");
+    assert_eq!(response.binding_state, SyncBindingState::Bound);
+    assert_eq!(response.config_version, "2026-05-29T10:00:00Z");
+    assert!(refreshed_binding.last_handshake_at > first_binding.last_handshake_at);
+}
+
+#[tokio::test]
+async fn sync_later_sync_without_node_id_reuses_existing_binding() {
+    let repository = MemoryNodeRepository::default();
+    let manager = manager_with_repository(repository.clone());
+
+    manager
+        .sync_agent(sync_request("agent-1", Some("node-1"), None))
+        .await
+        .unwrap();
+    let first_binding = manager.agent_binding("agent-1").await.unwrap();
+
+    tokio::time::sleep(Duration::from_millis(5)).await;
+
+    let reloaded_manager = manager_with_repository(repository);
+    let response = reloaded_manager
+        .sync_agent(sync_request("agent-1", None, Some("stale-config-version")))
+        .await
+        .unwrap();
+    let refreshed_binding = reloaded_manager.agent_binding("agent-1").await.unwrap();
+
+    assert!(response.accepted);
+    assert_eq!(response.bound_node_id, "node-1");
+    assert_eq!(response.binding_state, SyncBindingState::Bound);
+    assert_eq!(response.agent_run_mode, AgentRunMode::Active);
+    assert_eq!(response.rejection_reason, None);
+    assert!(refreshed_binding.last_handshake_at > first_binding.last_handshake_at);
+}
+
+#[tokio::test]
+async fn sync_initial_sync_without_node_id_returns_explicit_unbound_rejection() {
+    let manager = manager();
+
+    let response = manager
+        .sync_agent(sync_request("agent-1", None, None))
+        .await
+        .unwrap();
+
+    assert!(!response.accepted);
+    assert_eq!(response.agent_id, "agent-1");
+    assert_eq!(response.bound_node_id, "");
+    assert_eq!(response.binding_state, SyncBindingState::Unbound);
+    assert_eq!(response.agent_run_mode, AgentRunMode::Idle);
+    assert_eq!(
+        response.rejection_reason,
+        Some("node_id is required for initial sync".to_string())
+    );
+    assert!(manager.agent_binding("agent-1").await.is_none());
+}
+
+#[tokio::test]
+async fn sync_conflict_binding_is_explicit_and_not_silently_overwritten() {
+    let repository = MemoryNodeRepository::default();
+    let manager = manager_with_repository(repository.clone());
+
+    manager
+        .sync_agent(sync_request("agent-1", Some("node-1"), None))
+        .await
+        .unwrap();
+
+    let reloaded_manager = manager_with_repository(repository);
+    let response = reloaded_manager
+        .sync_agent(sync_request("agent-2", Some("node-1"), None))
+        .await
+        .unwrap();
+
+    assert!(!response.accepted);
+    assert_eq!(response.agent_id, "agent-2");
+    assert_eq!(response.bound_node_id, "node-1");
+    assert_eq!(response.binding_state, SyncBindingState::Conflict);
+    assert_eq!(response.agent_run_mode, AgentRunMode::Idle);
+    assert_eq!(
+        response.rejection_reason,
+        Some("node node-1 is already bound to agent agent-1".to_string())
+    );
+
+    let preserved_binding = reloaded_manager.agent_binding("agent-1").await.unwrap();
+    assert_eq!(preserved_binding.node_id, "node-1");
+    assert!(reloaded_manager.agent_binding("agent-2").await.is_none());
+}
+
+#[tokio::test]
+async fn sync_response_includes_runtime_and_polling_config_fields() {
+    let manager = manager();
+
+    let response = manager
+        .sync_agent(sync_request("agent-1", Some("node-1"), None))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.heartbeat_config,
+        HeartbeatConfig {
+            version: "1".to_string(),
+            data_link_id: "dl_heartbeat_001".to_string(),
+            vm_base_url: "http://victoriametrics:8428".to_string(),
+            interval_secs: 60,
+        }
+    );
+    assert_eq!(
+        response.job_manage_config,
+        JobManageConfig {
+            version: "1".to_string(),
+            base_url: "http://job-manage:3000/api/job-manage/v1/tasks".to_string(),
+            task_filter_defaults: TaskFilterDefaults {
+                states: vec![
+                    "queued".to_string(),
+                    "acknowledged".to_string(),
+                    "running".to_string(),
+                ],
+            },
+        }
+    );
+    assert_eq!(response.sync_interval_secs, 30);
+    assert_eq!(response.task_sync_interval_secs, 10);
 }
 
 #[tokio::test]
@@ -402,4 +595,98 @@ async fn refresh_status_returns_storage_error_when_heartbeat_data_link_id_no_lon
         }
         other => panic!("expected storage error, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn aggregate_status_snapshot_from_query_reports_online_for_fresh_heartbeat() {
+    let manager = manager();
+    let node = manager
+        .create(CreateNode {
+            name: "worker-1".to_string(),
+            endpoint: "http://worker-1:8080".to_string(),
+            labels: vec![],
+        })
+        .await
+        .unwrap();
+
+    let datalink_service = DataLinkService::new(MemoryDataLinkRepository::new());
+    let bundle = datalink_service
+        .apply_data_link(
+            heartbeat_spec("nm_node_heartbeat"),
+            ApplyDataLinkOptions {
+                idempotency_key: Some("nm-heartbeat".to_string()),
+            },
+        )
+        .unwrap();
+    let heartbeat_store = InMemoryHeartbeatStore::new();
+    heartbeat_store.insert(
+        "nm_node_heartbeat",
+        HeartbeatSample {
+            node_id: node.id.clone(),
+            observed_at: Utc.with_ymd_and_hms(2026, 5, 29, 10, 0, 0).unwrap(),
+        },
+    );
+    let engine = QueryEngine::new(datalink_service, heartbeat_store);
+
+    let snapshot = manager
+        .aggregate_status_snapshot_from_query(
+            &node.id,
+            &engine,
+            &bundle.data_link.data_link_id,
+            Utc.with_ymd_and_hms(2026, 5, 29, 10, 3, 0).unwrap(),
+            TimeDelta::minutes(5),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(snapshot.node_id, node.id);
+    assert_eq!(snapshot.online_status, OnlineStatus::Online);
+    assert!(snapshot.status_reason.is_none());
+}
+
+#[tokio::test]
+async fn aggregate_status_snapshot_from_query_reports_unknown_when_query_path_breaks() {
+    let manager = manager();
+    let node = manager
+        .create(CreateNode {
+            name: "worker-1".to_string(),
+            endpoint: "http://worker-1:8080".to_string(),
+            labels: vec![],
+        })
+        .await
+        .unwrap();
+
+    let issued_bundle = DataLinkService::new(MemoryDataLinkRepository::new())
+        .apply_data_link(
+            heartbeat_spec("nm_node_heartbeat"),
+            ApplyDataLinkOptions {
+                idempotency_key: Some("nm-heartbeat".to_string()),
+            },
+        )
+        .unwrap();
+    let stale_data_link_id = issued_bundle.data_link.data_link_id.clone();
+    let engine = QueryEngine::new(
+        DataLinkService::new(MemoryDataLinkRepository::new()),
+        InMemoryHeartbeatStore::new(),
+    );
+
+    let snapshot = manager
+        .aggregate_status_snapshot_from_query(
+            &node.id,
+            &engine,
+            &stale_data_link_id,
+            Utc.with_ymd_and_hms(2026, 5, 29, 10, 3, 0).unwrap(),
+            TimeDelta::minutes(5),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(snapshot.node_id, node.id);
+    assert_eq!(snapshot.online_status, OnlineStatus::Unknown);
+    assert!(
+        snapshot
+            .status_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains(&stale_data_link_id))
+    );
 }
