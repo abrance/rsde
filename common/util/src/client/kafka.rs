@@ -154,7 +154,7 @@ impl KafkaProducer {
             .set("batch.num.messages", "10000");
 
         if let Some(timeout) = config.timeout {
-            client_config.set("socket.timeout.ms", &(timeout * 1000).to_string());
+            client_config.set("socket.timeout.ms", (timeout * 1000).to_string());
         }
 
         // 应用 SASL 认证配置
@@ -162,7 +162,7 @@ impl KafkaProducer {
 
         let producer = client_config
             .create()
-            .map_err(|e| format!("Failed to create Kafka producer: {}", e))?;
+            .map_err(|e| format!("Failed to create Kafka producer: {e}"))?;
 
         Ok(Self { producer })
     }
@@ -178,7 +178,7 @@ impl KafkaProducer {
         self.producer
             .send(record, Timeout::After(Duration::from_secs(5)))
             .await
-            .map_err(|(e, _)| format!("Failed to send message: {}", e))?;
+            .map_err(|(e, _)| format!("Failed to send message: {e}"))?;
 
         Ok(())
     }
@@ -191,7 +191,7 @@ impl KafkaProducer {
         value: &T,
     ) -> Result<(), String> {
         let payload =
-            serde_json::to_vec(value).map_err(|e| format!("Failed to serialize message: {}", e))?;
+            serde_json::to_vec(value).map_err(|e| format!("Failed to serialize message: {e}"))?;
         self.send(topic, key, &payload).await
     }
 
@@ -199,7 +199,7 @@ impl KafkaProducer {
     pub fn flush(&self, timeout: Duration) -> Result<(), String> {
         self.producer
             .flush(Timeout::After(timeout))
-            .map_err(|e| format!("Failed to flush producer: {}", e))?;
+            .map_err(|e| format!("Failed to flush producer: {e}"))?;
         Ok(())
     }
 
@@ -210,7 +210,7 @@ impl KafkaProducer {
         self.producer
             .client()
             .fetch_metadata(None, Timeout::After(timeout))
-            .map_err(|e| format!("Ping failed: {}", e))?;
+            .map_err(|e| format!("Ping failed: {e}"))?;
         Ok(())
     }
 
@@ -220,7 +220,7 @@ impl KafkaProducer {
             .producer
             .client()
             .fetch_metadata(Some(topic), Timeout::After(timeout))
-            .map_err(|e| format!("Failed to fetch metadata: {}", e))?;
+            .map_err(|e| format!("Failed to fetch metadata: {e}"))?;
 
         let mut result = format!("Cluster: {}\n", metadata.orig_broker_name());
         result.push_str(&format!("Brokers: {}\n", metadata.brokers().len()));
@@ -250,17 +250,17 @@ impl KafkaConsumer {
             .set("group.id", group_id)
             .set(
                 "enable.auto.commit",
-                &config.enable_auto_commit.unwrap_or(true).to_string(),
+                config.enable_auto_commit.unwrap_or(true).to_string(),
             )
             .set(
                 "session.timeout.ms",
-                &config.session_timeout_ms.unwrap_or(6000).to_string(),
+                config.session_timeout_ms.unwrap_or(6000).to_string(),
             )
             .set("enable.partition.eof", "false")
             .set("auto.offset.reset", "earliest");
 
         if let Some(timeout) = config.timeout {
-            client_config.set("socket.timeout.ms", &(timeout * 1000).to_string());
+            client_config.set("socket.timeout.ms", (timeout * 1000).to_string());
         }
 
         // 应用 SASL 认证配置
@@ -268,7 +268,7 @@ impl KafkaConsumer {
 
         let consumer: StreamConsumer = client_config
             .create()
-            .map_err(|e| format!("Failed to create Kafka consumer: {}", e))?;
+            .map_err(|e| format!("Failed to create Kafka consumer: {e}"))?;
 
         Ok(Self { consumer })
     }
@@ -277,7 +277,7 @@ impl KafkaConsumer {
     pub fn subscribe(&self, topics: &[&str]) -> Result<(), String> {
         self.consumer
             .subscribe(topics)
-            .map_err(|e| format!("Failed to subscribe to topics: {}", e))?;
+            .map_err(|e| format!("Failed to subscribe to topics: {e}"))?;
         Ok(())
     }
 
@@ -286,14 +286,14 @@ impl KafkaConsumer {
         self.consumer
             .recv()
             .await
-            .map_err(|e| format!("Failed to receive message: {}", e))
+            .map_err(|e| format!("Failed to receive message: {e}"))
     }
 
     /// 提交当前偏移量
     pub fn commit(&self) -> Result<(), String> {
         self.consumer
             .commit_consumer_state(rdkafka::consumer::CommitMode::Sync)
-            .map_err(|e| format!("Failed to commit offset: {}", e))?;
+            .map_err(|e| format!("Failed to commit offset: {e}"))?;
         Ok(())
     }
 
@@ -308,7 +308,7 @@ impl KafkaConsumer {
     pub fn ping(&self, timeout: Duration) -> Result<(), String> {
         self.consumer
             .fetch_metadata(None, Timeout::After(timeout))
-            .map_err(|e| format!("Ping failed: {}", e))?;
+            .map_err(|e| format!("Ping failed: {e}"))?;
         Ok(())
     }
 
@@ -317,7 +317,7 @@ impl KafkaConsumer {
         let metadata = self
             .consumer
             .fetch_metadata(Some(topic), Timeout::After(timeout))
-            .map_err(|e| format!("Failed to fetch metadata: {}", e))?;
+            .map_err(|e| format!("Failed to fetch metadata: {e}"))?;
 
         let mut result = format!("Cluster: {}\n", metadata.orig_broker_name());
         result.push_str(&format!("Brokers: {}\n", metadata.brokers().len()));
@@ -345,7 +345,7 @@ pub fn extract_payload<'a>(msg: &'a BorrowedMessage<'a>) -> Option<&'a [u8]> {
 /// 辅助函数：从消息中提取 payload 并反序列化为 JSON
 pub fn extract_json<'a, T: Deserialize<'a>>(msg: &'a BorrowedMessage<'a>) -> Result<T, String> {
     let payload = extract_payload(msg).ok_or_else(|| "Message has no payload".to_string())?;
-    serde_json::from_slice(payload).map_err(|e| format!("Failed to deserialize message: {}", e))
+    serde_json::from_slice(payload).map_err(|e| format!("Failed to deserialize message: {e}"))
 }
 
 #[cfg(test)]

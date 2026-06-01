@@ -140,7 +140,7 @@ async fn ping_kafka(
     let producer = match KafkaProducer::new(&config) {
         Ok(p) => p,
         Err(e) => {
-            result.error = Some(format!("create producer fail: {}", e));
+            result.error = Some(format!("create producer fail: {e}"));
             error!("kafka ping fail: create producer error, {}", e);
             return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(result)));
         }
@@ -152,7 +152,7 @@ async fn ping_kafka(
             result.success = true;
         }
         Err(e) => {
-            result.error = Some(format!("ping fail: {}", e));
+            result.error = Some(format!("ping fail: {e}"));
             error!("kafka ping fail: {}", e);
             return Err((StatusCode::SERVICE_UNAVAILABLE, Json(result)));
         }
@@ -184,28 +184,27 @@ async fn ping_kafka(
 }
 
 fn parse_metadata(metadata: &str, result: &mut PingResponse) {
-    if let Some(cluster_line) = metadata.lines().next() {
-        if let Some(cluster) = cluster_line.strip_prefix("Cluster: ") {
-            result.cluster_name = Some(cluster.to_string());
-        }
+    if let Some(cluster_line) = metadata.lines().next()
+        && let Some(cluster) = cluster_line.strip_prefix("Cluster: ")
+    {
+        result.cluster_name = Some(cluster.to_string());
     }
-    if let Some(brokers_line) = metadata.lines().nth(1) {
-        if let Some(count_str) = brokers_line.strip_prefix("Brokers: ") {
-            result.broker_count = count_str.parse().ok();
-        }
+    if let Some(brokers_line) = metadata.lines().nth(1)
+        && let Some(count_str) = brokers_line.strip_prefix("Brokers: ")
+    {
+        result.broker_count = count_str.parse().ok();
     }
-    if let Some(topics_line) = metadata.lines().nth(2) {
-        if let Some(count_str) = topics_line.strip_prefix("Topics: ") {
-            result.topic_count = count_str.parse().ok();
-        }
+    if let Some(topics_line) = metadata.lines().nth(2)
+        && let Some(count_str) = topics_line.strip_prefix("Topics: ")
+    {
+        result.topic_count = count_str.parse().ok();
     }
     for line in metadata.lines() {
-        if line.contains("partitions") {
-            if let Some(parts) = line.split(':').nth(1) {
-                if let Some(count_str) = parts.trim().split_whitespace().next() {
-                    result.partition_count = count_str.parse().ok();
-                }
-            }
+        if line.contains("partitions")
+            && let Some(parts) = line.split(':').nth(1)
+            && let Some(count_str) = parts.split_whitespace().next()
+        {
+            result.partition_count = count_str.parse().ok();
         }
     }
 }
