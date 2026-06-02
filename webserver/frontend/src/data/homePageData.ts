@@ -1,6 +1,5 @@
 import { rcToolData } from "./rcToolsData"
 
-
 export interface ToolCardData {
     name: string
     path: string
@@ -10,18 +9,6 @@ export interface ToolCardData {
 }
 
 export const toolsData: ToolCardData[] = [
-    // {
-    //     name: 'Rsync',
-    //     path: '/rsync',
-    //     icon: '🔄',
-    //     description: '高性能数据同步工具，支持规则引擎和多种传输协议',
-    //     features: [
-    //         '基于规则的文件同步',
-    //         '支持本地和远程同步',
-    //         '实时文件监控',
-    //         '灵活的配置管理',
-    //     ],
-    // },
     {
         name: rcToolData.title,
         path: rcToolData.path,
@@ -61,6 +48,18 @@ export const toolsData: ToolCardData[] = [
             '多语言支持',
             '坐标信息提取',
             '批量处理',
+        ],
+    },
+    {
+        name: 'JobManage',
+        path: '/job-manage',
+        icon: '⚙️',
+        description: '面向 nodemanage 节点的前端作业管理工作台',
+        features: [
+            '作业状态流转',
+            '作业预检',
+            '重试与取消',
+            '过滤与检索',
         ],
     },
 ]
