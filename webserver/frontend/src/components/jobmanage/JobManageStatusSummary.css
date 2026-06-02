@@ -1,0 +1,33 @@
+.job-manage-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+.job-manage-summary-card {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 1.5rem;
+}
+
+.job-manage-summary-label {
+    font-size: 0.875rem;
+    color: var(--color-text-muted);
+    margin-bottom: 0.5rem;
+}
+
+.job-manage-summary-value {
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.job-manage-summary-value.is-running {
+    color: var(--color-info);
+}
+
+.job-manage-summary-value.is-failed {
+    color: var(--color-error);
+}
