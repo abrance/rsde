@@ -1,0 +1,97 @@
+import type { JobRecord } from '../types/jobmanage'
+
+const seedJobRecords: JobRecord[] = [
+    {
+        id: 'job-001',
+        name: '构建配置巡检',
+        nodeId: 'node-dev-01',
+        nodeName: 'dev-gateway-01',
+        status: 'pending',
+        createdAt: '2026-06-01T08:20:00Z',
+        updatedAt: '2026-06-01T08:20:00Z',
+        owner: 'ops-platform',
+        description: '对新纳管节点执行基础配置巡检，并在正式下发前检查执行前条件。',
+        lastError: null,
+        precheck: null,
+    },
+    {
+        id: 'job-002',
+        name: '执行脚本灰度发布',
+        nodeId: 'node-prod-07',
+        nodeName: 'prod-batch-07',
+        status: 'running',
+        createdAt: '2026-06-01T07:40:00Z',
+        updatedAt: '2026-06-01T08:12:00Z',
+        startedAt: '2026-06-01T07:45:00Z',
+        owner: 'release-bot',
+        description: '将灰度脚本先投递到批处理节点，验证运行态与回传链路。',
+        lastError: null,
+        precheck: {
+            allowed: true,
+            reason: 'heartbeat 正常，agent 已连接',
+            checkedAt: '2026-06-01T07:44:30Z',
+        },
+    },
+    {
+        id: 'job-003',
+        name: '夜间日志采集回收',
+        nodeId: 'node-prod-02',
+        nodeName: 'prod-storage-02',
+        status: 'success',
+        createdAt: '2026-05-31T23:20:00Z',
+        updatedAt: '2026-05-31T23:40:00Z',
+        startedAt: '2026-05-31T23:21:00Z',
+        finishedAt: '2026-05-31T23:39:00Z',
+        owner: 'night-watch',
+        description: '从节点回收日志摘要与执行结果，供白天巡检面板聚合展示。',
+        lastError: null,
+        precheck: {
+            allowed: true,
+            reason: '节点在线，可执行',
+            checkedAt: '2026-05-31T23:20:40Z',
+        },
+    },
+    {
+        id: 'job-004',
+        name: '补丁热修复失败回滚',
+        nodeId: 'node-prod-09',
+        nodeName: 'prod-edge-09',
+        status: 'failed',
+        createdAt: '2026-05-31T19:15:00Z',
+        updatedAt: '2026-05-31T19:28:00Z',
+        startedAt: '2026-05-31T19:16:00Z',
+        finishedAt: '2026-05-31T19:28:00Z',
+        owner: 'hotfix-operator',
+        description: '对边缘节点执行热修复脚本，但在执行阶段出现退出码异常。',
+        lastError: '脚本退出码 127，目标节点缺少预期二进制。',
+        precheck: {
+            allowed: false,
+            reason: '节点依赖校验不通过，需要先补齐运行时',
+            checkedAt: '2026-05-31T19:15:30Z',
+        },
+    },
+    {
+        id: 'job-005',
+        name: '离线节点命令下发演练',
+        nodeId: 'node-test-03',
+        nodeName: 'test-runner-03',
+        status: 'cancelled',
+        createdAt: '2026-05-30T11:00:00Z',
+        updatedAt: '2026-05-30T11:12:00Z',
+        owner: 'qa-bot',
+        description: '模拟离线节点预检失败后由操作者取消任务。',
+        lastError: '节点离线，任务未执行。',
+        precheck: {
+            allowed: false,
+            reason: '最近 heartbeat 超时，节点已离线',
+            checkedAt: '2026-05-30T11:01:00Z',
+        },
+    },
+]
+
+export function buildInitialJobRecords(): JobRecord[] {
+    return seedJobRecords.map((job) => ({
+        ...job,
+        precheck: job.precheck ? { ...job.precheck } : job.precheck,
+    }))
+}

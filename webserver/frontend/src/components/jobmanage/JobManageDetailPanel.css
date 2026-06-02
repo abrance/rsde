@@ -1,0 +1,104 @@
+.job-manage-detail-content {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+}
+
+.detail-group h3 {
+    font-size: 1.125rem;
+    margin-top: 0;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.detail-list {
+    margin: 0;
+    display: grid;
+    grid-template-columns: minmax(80px, max-content) 1fr;
+    gap: 0.75rem 1rem;
+}
+
+.detail-list dt {
+    color: var(--color-text-muted);
+    font-weight: 500;
+}
+
+.detail-list dd {
+    margin: 0;
+    color: var(--color-text);
+}
+
+.detail-error {
+    color: var(--color-error);
+    word-break: break-word;
+}
+
+.detail-muted {
+    color: var(--color-text-muted);
+    font-style: italic;
+}
+
+.precheck-card {
+    padding: 1rem;
+    border-radius: 6px;
+    border: 1px solid var(--color-border);
+}
+
+.precheck-card.is-allowed {
+    background: var(--color-success-bg);
+    border-color: var(--color-success-border);
+}
+
+.precheck-card.is-denied {
+    background: var(--color-error-bg);
+    border-color: var(--color-error-border);
+}
+
+.precheck-card p {
+    margin: 0 0 0.5rem 0;
+}
+
+.precheck-card p:last-child {
+    margin-bottom: 0;
+}
+
+.precheck-time {
+    font-size: 0.875rem;
+    color: var(--color-text-muted);
+    margin-top: 1rem !important;
+}
+.job-manage-section-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+}
+
+.job-manage-detail-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.action-btn {
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-bg-subtle);
+    color: var(--color-text);
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.action-btn:hover {
+    background: var(--color-bg-hover);
+}
+
+.btn-danger {
+    color: var(--color-error);
+    border-color: var(--color-error-border);
+}
+
+.btn-danger:hover {
+    background: var(--color-error-bg);
+}

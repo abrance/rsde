@@ -1,0 +1,165 @@
+.job-manage-page {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.job-manage-layout,
+.job-manage-summary {
+    display: grid;
+    gap: 1rem;
+}
+
+.job-manage-summary {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.job-manage-layout {
+    grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.9fr);
+    align-items: start;
+}
+
+.job-manage-hero {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.job-manage-eyebrow {
+    font-size: 0.85rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--primary-color);
+}
+
+.job-manage-description {
+    max-width: 52rem;
+    color: var(--text-color);
+    opacity: 0.8;
+}
+
+.job-manage-caption {
+    max-width: 46rem;
+    color: var(--color-text-muted);
+    font-size: 0.95rem;
+}
+
+.job-manage-summary-card,
+.job-manage-list,
+.job-manage-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.job-manage-summary-label {
+    font-size: 0.95rem;
+    color: var(--text-color);
+    opacity: 0.75;
+}
+
+.job-manage-summary-value {
+    font-size: 2rem;
+}
+
+.job-manage-section-heading {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.job-manage-section-heading p {
+    color: var(--text-color);
+    opacity: 0.75;
+}
+
+.job-manage-job-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    list-style: none;
+}
+
+.job-manage-job-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.9rem 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.85rem;
+    background: color-mix(in srgb, var(--card-bg) 70%, transparent);
+}
+
+.job-manage-job-item p {
+    margin-top: 0.25rem;
+    opacity: 0.7;
+}
+
+.job-manage-status-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 5.5rem;
+    padding: 0.35rem 0.75rem;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    text-transform: capitalize;
+}
+
+.job-manage-status-pill.is-pending {
+    background: rgba(245, 158, 11, 0.14);
+    color: #b45309;
+}
+
+.job-manage-status-pill.is-running {
+    background: rgba(59, 130, 246, 0.14);
+    color: #1d4ed8;
+}
+
+.job-manage-status-pill.is-success {
+    background: rgba(16, 185, 129, 0.14);
+    color: #047857;
+}
+
+.job-manage-status-pill.is-failed {
+    background: rgba(239, 68, 68, 0.14);
+    color: #b91c1c;
+}
+
+.job-manage-status-pill.is-cancelled {
+    background: rgba(107, 114, 128, 0.16);
+    color: #4b5563;
+}
+
+@media (max-width: 960px) {
+    .job-manage-layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+.job-manage-message {
+    margin-top: 1rem;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    font-size: 0.875rem;
+}
+
+.job-manage-message.is-success {
+    background-color: var(--color-success-bg);
+    color: var(--color-success);
+    border: 1px solid var(--color-success-border);
+}
+
+.job-manage-message.is-error {
+    background-color: var(--color-error-bg);
+    color: var(--color-error);
+    border: 1px solid var(--color-error-border);
+}
+
+.job-manage-message.is-info {
+    background-color: var(--color-info-bg);
+    color: var(--color-info);
+    border: 1px solid var(--color-info-border);
+}
