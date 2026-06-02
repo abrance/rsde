@@ -63,6 +63,12 @@ export default function Layout({ children }: LayoutProps) {
                             >
                                 对象存储
                             </Link>
+                            <Link
+                                to="/job-manage"
+                                className={`nav-link ${isActive('/job-manage') ? 'active' : ''}`}
+                            >
+                                JobManage
+                            </Link>
                         </nav>
                     </div>
                 </div>
