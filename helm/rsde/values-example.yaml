@@ -128,6 +128,36 @@ config:
     #   min_connections: 1
     #   connect_timeout_secs: 10
 
+  # NodeManage 配置
+  # 不配置 mysql 时，apiserver 使用内存仓储；这适合默认的 Kubernetes 示例部署。
+  # 如果需要持久化，请显式配置一个可达的 MySQL Service，不要使用 127.0.0.1。
+  nodemanage:
+    table_prefix: "node_"
+    rsagent_package_url: "https://example.com/rsagent.tar.gz"
+    install_root: "/opt/rsagent"
+    register_callback_url: "http://rsde-apiserver.xy.svc.cluster.local:3000/api/nodes/agent/sync"
+    install_plugins: []
+    register_wait_timeout_secs: 30
+    ssh_connect_timeout_secs: 10
+    heartbeat:
+      result_table_name: "nm_node_heartbeat"
+      metric_name: "nm_node_heartbeat"
+      query_template: "query $metric_name where node_id = $node_id and agent_id = $agent_id and node_ip = $node_ip between $start_at and $end_at"
+      storage_cluster: "default"
+      interval_seconds: 60
+      retention_days: 7
+      refresh_interval_secs: 60
+      status_window_secs: 300
+    # mysql:
+    #   host: "mysql.namespace.svc.cluster.local"
+    #   port: 3306
+    #   user: "root"
+    #   password: "your-password"
+    #   database: "rsde"
+    #   max_connections: 10
+    #   min_connections: 1
+    #   connect_timeout_secs: 10
+
 # 环境变量
 env:
   - name: RUST_LOG
