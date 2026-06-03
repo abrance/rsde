@@ -1,7 +1,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use axum::{
@@ -11,17 +11,17 @@ use axum::{
 };
 use tower::util::ServiceExt;
 
+static FRONTEND_TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 struct TestFrontendDir {
     path: PathBuf,
 }
 
 impl TestFrontendDir {
     fn new() -> Self {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("rsde-frontend-test-{unique}"));
+        let unique = FRONTEND_TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let path = std::env::temp_dir().join(format!("rsde-frontend-test-{pid}-{unique}"));
 
         fs::create_dir_all(path.join("assets")).expect("create frontend test dir");
         fs::write(
