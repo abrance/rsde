@@ -1,7 +1,8 @@
 use crate::object_storage::dto::{
-    CreateDirectoryResponse, CreateUploadTokenResponse, DeleteObjectFailure, DeleteObjectResponse,
-    DeleteObjectsResponse, DownloadUrlResponse, HealthResponse, ListObjectsResponse,
-    MoveObjectResponse, ObjectDetailResponse, ObjectItem, ObjectPrefix,
+    CompleteUploadSessionResponse, CreateDirectoryResponse, CreateUploadSessionResponse,
+    CreateUploadTokenResponse, DeleteObjectFailure, DeleteObjectResponse, DeleteObjectsResponse,
+    DownloadUrlResponse, HealthResponse, ListObjectsResponse, MoveObjectResponse,
+    ObjectDetailResponse, ObjectItem, ObjectPrefix, UploadSessionPartResponse,
 };
 use crate::object_storage::error::{ObjectStorageError, Result};
 use crate::object_storage::qiniu::{
@@ -10,8 +11,10 @@ use crate::object_storage::qiniu::{
 };
 use async_trait::async_trait;
 use chrono::{Duration as ChronoDuration, Utc};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use tokio::sync::Mutex;
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct StoredObjectItem {
@@ -55,12 +58,40 @@ pub trait ObjectStorageBackend: Send + Sync {
     fn create_upload_token(&self, key: &str, ttl_secs: u64) -> Result<String>;
     fn create_private_download_url(&self, url: &str, ttl_secs: u64) -> Result<String>;
     fn upload_url(&self) -> String;
+    async fn create_multipart_upload(&self, key: &str, part_size_bytes: u64) -> Result<String>;
+    async fn upload_multipart_part(
+        &self,
+        key: &str,
+        upload_id: &str,
+        part_number: u32,
+        bytes: Vec<u8>,
+    ) -> Result<String>;
+    async fn complete_multipart_upload(
+        &self,
+        key: &str,
+        upload_id: &str,
+        parts: Vec<(u32, String)>,
+    ) -> Result<()>;
+    async fn abort_multipart_upload(&self, key: &str, upload_id: &str) -> Result<()>;
+}
+
+#[derive(Debug, Clone)]
+struct UploadSessionState {
+    session_id: String,
+    object_key: String,
+    upload_key: String,
+    upload_id: String,
+    _part_size_bytes: u64,
+    part_count: u32,
+    uploaded_parts: BTreeMap<u32, String>,
+    _expires_at: String,
 }
 
 #[derive(Clone)]
 pub struct ObjectStorageService {
     config: Arc<config::object_storage::ObjectStorageConfig>,
     backend: Arc<dyn ObjectStorageBackend>,
+    upload_sessions: Arc<Mutex<BTreeMap<String, UploadSessionState>>>,
 }
 
 impl ObjectStorageService {
@@ -71,6 +102,7 @@ impl ObjectStorageService {
         Self {
             config: Arc::new(config),
             backend,
+            upload_sessions: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -221,6 +253,154 @@ impl ObjectStorageService {
             upload_url: self.backend.upload_url(),
             expires_at: expires_at(self.config.upload_token_ttl_secs),
             bucket: self.config.bucket.clone(),
+        })
+    }
+
+    pub async fn create_upload_session(
+        &self,
+        prefix: Option<&str>,
+        filename: &str,
+        file_size_bytes: u64,
+        part_size_bytes: Option<u64>,
+    ) -> Result<CreateUploadSessionResponse> {
+        ensure_non_empty_key(filename, "filename")?;
+        if file_size_bytes == 0 {
+            return Err(ObjectStorageError::InvalidInput(
+                "file_size_bytes must be greater than zero".to_string(),
+            ));
+        }
+
+        let current_prefix = self.resolve_prefix(prefix)?;
+        let normalized_filename = normalize_key(filename)?;
+        ensure_valid_object_key(&normalized_filename, "filename")?;
+        let visible_key = join_directory_marker(&current_prefix, &normalized_filename);
+        let stored_key = self.resolve_object_key(&visible_key)?;
+        let part_size_bytes = part_size_bytes.unwrap_or(default_part_size_bytes());
+        if part_size_bytes == 0 {
+            return Err(ObjectStorageError::InvalidInput(
+                "part_size_bytes must be greater than zero".to_string(),
+            ));
+        }
+
+        let part_count_u64 = file_size_bytes.div_ceil(part_size_bytes);
+        let part_count = u32::try_from(part_count_u64).map_err(|_| {
+            ObjectStorageError::InvalidInput("file is too large to split into parts".to_string())
+        })?;
+
+        let upload_id = self
+            .backend
+            .create_multipart_upload(&stored_key, part_size_bytes)
+            .await?;
+        let session_id = Uuid::new_v4().to_string();
+        let expires_at = expires_at(self.config.upload_token_ttl_secs);
+
+        let mut sessions = self.upload_sessions.lock().await;
+        sessions.insert(
+            session_id.clone(),
+            UploadSessionState {
+                session_id: session_id.clone(),
+                object_key: self.visible_key(&stored_key),
+                upload_key: stored_key.clone(),
+                upload_id,
+                _part_size_bytes: part_size_bytes,
+                part_count,
+                uploaded_parts: BTreeMap::new(),
+                _expires_at: expires_at.clone(),
+            },
+        );
+
+        Ok(CreateUploadSessionResponse {
+            session_id,
+            object_key: self.visible_key(&stored_key),
+            upload_key: stored_key,
+            part_size_bytes,
+            part_count,
+            expires_at,
+        })
+    }
+
+    pub async fn upload_session_part(
+        &self,
+        session_id: &str,
+        part_number: u32,
+        bytes: Vec<u8>,
+    ) -> Result<UploadSessionPartResponse> {
+        if bytes.is_empty() {
+            return Err(ObjectStorageError::InvalidInput(
+                "part body cannot be empty".to_string(),
+            ));
+        }
+
+        let (upload_key, upload_id, expected_part_count) = {
+            let sessions = self.upload_sessions.lock().await;
+            let session = sessions.get(session_id).ok_or_else(|| {
+                ObjectStorageError::NotFound("upload session not found".to_string())
+            })?;
+            (
+                session.upload_key.clone(),
+                session.upload_id.clone(),
+                session.part_count,
+            )
+        };
+
+        if part_number == 0 || part_number > expected_part_count {
+            return Err(ObjectStorageError::InvalidInput(format!(
+                "part_number must be between 1 and {expected_part_count}"
+            )));
+        }
+
+        let etag = self
+            .backend
+            .upload_multipart_part(&upload_key, &upload_id, part_number, bytes)
+            .await?;
+
+        let mut sessions = self.upload_sessions.lock().await;
+        let session = sessions
+            .get_mut(session_id)
+            .ok_or_else(|| ObjectStorageError::NotFound("upload session not found".to_string()))?;
+        session.uploaded_parts.insert(part_number, etag);
+
+        Ok(UploadSessionPartResponse {
+            session_id: session.session_id.clone(),
+            part_number,
+            uploaded_parts: session.uploaded_parts.keys().copied().collect(),
+        })
+    }
+
+    pub async fn complete_upload_session(
+        &self,
+        session_id: &str,
+    ) -> Result<CompleteUploadSessionResponse> {
+        let session = {
+            let sessions = self.upload_sessions.lock().await;
+            sessions.get(session_id).cloned().ok_or_else(|| {
+                ObjectStorageError::NotFound("upload session not found".to_string())
+            })?
+        };
+
+        if session.uploaded_parts.len() != usize::try_from(session.part_count).unwrap_or(usize::MAX)
+        {
+            return Err(ObjectStorageError::UploadSessionIncomplete(
+                "not all parts have been uploaded".to_string(),
+            ));
+        }
+
+        let parts = session
+            .uploaded_parts
+            .iter()
+            .map(|(part_number, etag)| (*part_number, etag.clone()))
+            .collect();
+
+        self.backend
+            .complete_multipart_upload(&session.upload_key, &session.upload_id, parts)
+            .await?;
+
+        let mut sessions = self.upload_sessions.lock().await;
+        sessions.remove(session_id);
+
+        Ok(CompleteUploadSessionResponse {
+            session_id: session.session_id,
+            object_key: session.object_key,
         })
     }
 
@@ -428,6 +608,10 @@ fn ensure_valid_object_key(key: &str, field_name: &str) -> Result<()> {
     }
 }
 
+fn default_part_size_bytes() -> u64 {
+    8 * 1024 * 1024
+}
+
 fn expires_at(ttl_secs: u64) -> String {
     (Utc::now() + ChronoDuration::seconds(ttl_secs as i64)).to_rfc3339()
 }
@@ -487,6 +671,7 @@ mod tests {
         ObjectStorageBackend, ObjectStorageService, StoredListObjectsOutput, StoredObjectDetail,
         StoredObjectItem,
     };
+    use crate::object_storage::error::ObjectStorageError;
     use crate::object_storage::error::Result;
     use async_trait::async_trait;
     use std::sync::Arc;
@@ -564,6 +749,40 @@ mod tests {
 
         fn upload_url(&self) -> String {
             "https://upload.example.com".to_string()
+        }
+
+        async fn create_multipart_upload(
+            &self,
+            key: &str,
+            _part_size_bytes: u64,
+        ) -> Result<String> {
+            Ok(format!("upload-id:{key}"))
+        }
+
+        async fn upload_multipart_part(
+            &self,
+            key: &str,
+            upload_id: &str,
+            part_number: u32,
+            bytes: Vec<u8>,
+        ) -> Result<String> {
+            Ok(format!(
+                "etag:{key}:{upload_id}:{part_number}:{}",
+                bytes.len()
+            ))
+        }
+
+        async fn complete_multipart_upload(
+            &self,
+            _key: &str,
+            _upload_id: &str,
+            _parts: Vec<(u32, String)>,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn abort_multipart_upload(&self, _key: &str, _upload_id: &str) -> Result<()> {
+            Ok(())
         }
     }
 
@@ -711,6 +930,97 @@ mod tests {
         assert_eq!(token.object_key, "images/2026/demo.png");
         assert_eq!(token.upload_key, "team-a/images/2026/demo.png");
         assert_eq!(token.upload_token, "token:team-a/images/2026/demo.png");
+    }
+
+    #[test]
+    fn create_upload_session_returns_visible_key_and_part_count() {
+        let service = test_service(Some("/team-a"));
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let session = runtime
+            .block_on(service.create_upload_session(
+                Some("images/2026/"),
+                "large-demo.bin",
+                10,
+                Some(4),
+            ))
+            .unwrap();
+
+        assert_eq!(session.object_key, "images/2026/large-demo.bin");
+        assert_eq!(session.upload_key, "team-a/images/2026/large-demo.bin");
+        assert_eq!(session.part_size_bytes, 4);
+        assert_eq!(session.part_count, 3);
+        assert!(!session.session_id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn upload_session_part_tracks_uploaded_parts() {
+        let service = test_service(Some("/team-a"));
+        let session = service
+            .create_upload_session(Some("images/2026/"), "large-demo.bin", 10, Some(4))
+            .await
+            .unwrap();
+
+        let uploaded = service
+            .upload_session_part(&session.session_id, 1, vec![1_u8, 2, 3, 4])
+            .await
+            .unwrap();
+
+        assert_eq!(uploaded.session_id, session.session_id);
+        assert_eq!(uploaded.part_number, 1);
+        assert_eq!(uploaded.uploaded_parts, vec![1]);
+    }
+
+    #[tokio::test]
+    async fn complete_upload_session_rejects_when_parts_are_missing() {
+        let service = test_service(Some("/team-a"));
+        let session = service
+            .create_upload_session(Some("images/2026/"), "large-demo.bin", 10, Some(4))
+            .await
+            .unwrap();
+
+        let err = service
+            .complete_upload_session(&session.session_id)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            ObjectStorageError::UploadSessionIncomplete(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn complete_upload_session_removes_session_after_success() {
+        let service = test_service(Some("/team-a"));
+        let session = service
+            .create_upload_session(Some("images/2026/"), "large-demo.bin", 10, Some(4))
+            .await
+            .unwrap();
+
+        service
+            .upload_session_part(&session.session_id, 1, vec![1_u8, 2, 3, 4])
+            .await
+            .unwrap();
+        service
+            .upload_session_part(&session.session_id, 2, vec![5_u8, 6, 7, 8])
+            .await
+            .unwrap();
+        service
+            .upload_session_part(&session.session_id, 3, vec![9_u8, 10])
+            .await
+            .unwrap();
+
+        let completed = service
+            .complete_upload_session(&session.session_id)
+            .await
+            .unwrap();
+        assert_eq!(completed.object_key, "images/2026/large-demo.bin");
+
+        let err = service
+            .upload_session_part(&session.session_id, 1, vec![1_u8, 2, 3, 4])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ObjectStorageError::NotFound(_)));
     }
 
     #[tokio::test]

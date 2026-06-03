@@ -143,6 +143,15 @@ pub struct CreateUploadTokenRequest {
     pub filename: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CreateUploadSessionRequest {
+    pub prefix: Option<String>,
+    pub filename: String,
+    pub file_size_bytes: u64,
+    #[serde(default)]
+    pub part_size_bytes: Option<u64>,
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct CreateUploadTokenResponse {
     pub upload_token: String,
@@ -151,6 +160,29 @@ pub struct CreateUploadTokenResponse {
     pub upload_url: String,
     pub expires_at: String,
     pub bucket: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct CreateUploadSessionResponse {
+    pub session_id: String,
+    pub object_key: String,
+    pub upload_key: String,
+    pub part_size_bytes: u64,
+    pub part_count: u32,
+    pub expires_at: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct UploadSessionPartResponse {
+    pub session_id: String,
+    pub part_number: u32,
+    pub uploaded_parts: Vec<u32>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct CompleteUploadSessionResponse {
+    pub session_id: String,
+    pub object_key: String,
 }
 
 #[derive(Debug, Deserialize)]
