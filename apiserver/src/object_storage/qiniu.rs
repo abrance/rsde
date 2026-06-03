@@ -8,9 +8,14 @@ use futures::{io::Cursor, stream::TryStreamExt};
 use qiniu_sdk::http::StatusCode;
 use qiniu_sdk::http_client::{ResponseError, ResponseErrorKind};
 use qiniu_sdk::objects::{ObjectsManager, apis::credential::Credential};
-use qiniu_sdk::upload::{AutoUploader, AutoUploaderObjectParams, UploadManager, UploadTokenSigner};
+use qiniu_sdk::upload::{
+    AutoUploader, AutoUploaderObjectParams, MultiPartsUploaderPrefer,
+    MultiPartsUploaderSchedulerPrefer, UploadManager, UploadTokenSigner,
+};
 use qiniu_sdk::upload_token::{ObjectUploadTokenProvider, ToStringOptions, UploadTokenProvider};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 
 #[derive(Clone)]
 pub struct QiniuObjectStorageBackend {
@@ -165,6 +170,90 @@ impl ObjectStorageBackend for QiniuObjectStorageBackend {
         let scheme = if self.use_https { "https" } else { "http" };
         format!("{}://{}", scheme, qiniu_upload_host(&self.region))
     }
+
+    async fn create_multipart_upload(&self, key: &str, _part_size_bytes: u64) -> Result<String> {
+        Ok(key.to_string())
+    }
+
+    async fn upload_multipart_part(
+        &self,
+        key: &str,
+        _upload_id: &str,
+        part_number: u32,
+        bytes: Vec<u8>,
+    ) -> Result<String> {
+        let path = multipart_temp_path(key);
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|err| ObjectStorageError::UploadError(err.to_string()))?;
+        }
+
+        let mut file = if part_number == 1 {
+            tokio::fs::File::create(&path)
+                .await
+                .map_err(|err| ObjectStorageError::UploadError(err.to_string()))?
+        } else {
+            tokio::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .await
+                .map_err(|err| ObjectStorageError::UploadError(err.to_string()))?
+        };
+
+        file.write_all(&bytes)
+            .await
+            .map_err(|err| ObjectStorageError::UploadError(err.to_string()))?;
+        file.flush()
+            .await
+            .map_err(|err| ObjectStorageError::UploadError(err.to_string()))?;
+
+        Ok(format!("part-{part_number}-{}", bytes.len()))
+    }
+
+    async fn complete_multipart_upload(
+        &self,
+        key: &str,
+        _upload_id: &str,
+        _parts: Vec<(u32, String)>,
+    ) -> Result<()> {
+        let path = multipart_temp_path(key);
+        let mut params = AutoUploaderObjectParams::builder();
+        params.object_name(key.to_string());
+        params.file_name(object_file_name(key));
+        params.multi_parts_uploader_prefer(MultiPartsUploaderPrefer::V2);
+        params.multi_parts_uploader_scheduler_prefer(MultiPartsUploaderSchedulerPrefer::Serial);
+
+        let uploader: AutoUploader = self.upload_manager.auto_uploader();
+        uploader
+            .async_upload_path(&path, params.build())
+            .await
+            .map_err(storage_error)?;
+
+        let _ = tokio::fs::remove_file(&path).await;
+        Ok(())
+    }
+
+    async fn abort_multipart_upload(&self, key: &str, _upload_id: &str) -> Result<()> {
+        let path = multipart_temp_path(key);
+        let _ = tokio::fs::remove_file(path).await;
+        Ok(())
+    }
+}
+
+fn multipart_temp_path(key: &str) -> PathBuf {
+    let sanitized = key.replace('/', "__");
+    std::env::temp_dir()
+        .join("rsde-object-storage-multipart")
+        .join(format!("{sanitized}.upload"))
+}
+
+fn object_file_name(key: &str) -> String {
+    Path::new(key)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("upload.bin")
+        .to_string()
 }
 
 fn qiniu_upload_host(region: &str) -> &'static str {

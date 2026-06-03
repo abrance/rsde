@@ -456,6 +456,180 @@ async fn object_storage_upload_token_rejects_directory_marker_filename() {
 }
 
 #[tokio::test]
+async fn object_storage_upload_session_create_returns_expected_fields() {
+    let base_url = spawn_object_storage_app().await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{base_url}/upload-sessions"))
+        .json(&serde_json::json!({
+            "prefix": "images/2026/",
+            "filename": "large-demo.bin",
+            "file_size_bytes": 10,
+            "part_size_bytes": 4
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["success"], true);
+    assert!(body["data"]["session_id"].as_str().is_some());
+    assert_eq!(body["data"]["object_key"], "images/2026/large-demo.bin");
+    assert_eq!(body["data"]["part_size_bytes"], 4);
+    assert_eq!(body["data"]["part_count"], 3);
+    assert!(body["data"]["expires_at"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn object_storage_upload_session_part_upload_returns_success_envelope() {
+    let base_url = spawn_object_storage_app().await;
+
+    let session_response = reqwest::Client::new()
+        .post(format!("{base_url}/upload-sessions"))
+        .json(&serde_json::json!({
+            "prefix": "images/2026/",
+            "filename": "large-demo.bin",
+            "file_size_bytes": 10,
+            "part_size_bytes": 4
+        }))
+        .send()
+        .await
+        .unwrap();
+    let session_body: serde_json::Value = session_response.json().await.unwrap();
+    let session_id = session_body["data"]["session_id"].as_str().unwrap();
+
+    let response = reqwest::Client::new()
+        .put(format!("{base_url}/upload-sessions/{session_id}/parts/1"))
+        .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+        .body(vec![1_u8, 2, 3, 4])
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["success"], true);
+    assert_eq!(body["data"]["session_id"], session_id);
+    assert_eq!(body["data"]["part_number"], 1);
+    assert_eq!(body["data"]["uploaded_parts"], serde_json::json!([1]));
+}
+
+#[tokio::test]
+async fn object_storage_upload_session_complete_returns_object_key() {
+    let base_url = spawn_object_storage_app().await;
+
+    let client = reqwest::Client::new();
+    let session_response = client
+        .post(format!("{base_url}/upload-sessions"))
+        .json(&serde_json::json!({
+            "prefix": "images/2026/",
+            "filename": "large-demo.bin",
+            "file_size_bytes": 10,
+            "part_size_bytes": 4
+        }))
+        .send()
+        .await
+        .unwrap();
+    let session_body: serde_json::Value = session_response.json().await.unwrap();
+    let session_id = session_body["data"]["session_id"].as_str().unwrap();
+
+    for (part_number, chunk) in [
+        (1_u32, vec![1_u8, 2, 3, 4]),
+        (2_u32, vec![5_u8, 6, 7, 8]),
+        (3_u32, vec![9_u8, 10]),
+    ] {
+        let response = client
+            .put(format!(
+                "{base_url}/upload-sessions/{session_id}/parts/{part_number}"
+            ))
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            .body(chunk)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+    }
+
+    let response = client
+        .post(format!("{base_url}/upload-sessions/{session_id}/complete"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["success"], true);
+    assert_eq!(body["data"]["session_id"], session_id);
+    assert_eq!(body["data"]["object_key"], "images/2026/large-demo.bin");
+}
+
+#[tokio::test]
+async fn object_storage_upload_session_part_upload_returns_404_for_unknown_session() {
+    let base_url = spawn_object_storage_app().await;
+
+    let response = reqwest::Client::new()
+        .put(format!(
+            "{base_url}/upload-sessions/missing-session/parts/1"
+        ))
+        .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+        .body(vec![1_u8, 2, 3, 4])
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 404);
+
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["success"], false);
+    assert_eq!(body["code"], 404);
+}
+
+#[tokio::test]
+async fn object_storage_upload_session_complete_rejects_missing_parts() {
+    let base_url = spawn_object_storage_app().await;
+
+    let client = reqwest::Client::new();
+    let session_response = client
+        .post(format!("{base_url}/upload-sessions"))
+        .json(&serde_json::json!({
+            "prefix": "images/2026/",
+            "filename": "large-demo.bin",
+            "file_size_bytes": 10,
+            "part_size_bytes": 4
+        }))
+        .send()
+        .await
+        .unwrap();
+    let session_body: serde_json::Value = session_response.json().await.unwrap();
+    let session_id = session_body["data"]["session_id"].as_str().unwrap();
+
+    let upload_response = client
+        .put(format!("{base_url}/upload-sessions/{session_id}/parts/1"))
+        .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+        .body(vec![1_u8, 2, 3, 4])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(upload_response.status(), 200);
+
+    let response = client
+        .post(format!("{base_url}/upload-sessions/{session_id}/complete"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 409);
+
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["success"], false);
+    assert_eq!(body["code"], "upload_session_incomplete");
+}
+
+#[tokio::test]
 async fn object_storage_public_download_url_uses_public_base_url() {
     let base_url = spawn_object_storage_app_with_config(public_base_url_config()).await;
 
@@ -640,5 +814,40 @@ impl ObjectStorageBackend for FakeBackend {
 
     fn upload_url(&self) -> String {
         "https://upload.example.com".to_string()
+    }
+
+    async fn create_multipart_upload(
+        &self,
+        _key: &str,
+        _part_size_bytes: u64,
+    ) -> apiserver::object_storage::error::Result<String> {
+        Ok("fake-upload-id".to_string())
+    }
+
+    async fn upload_multipart_part(
+        &self,
+        _key: &str,
+        _upload_id: &str,
+        part_number: u32,
+        _bytes: Vec<u8>,
+    ) -> apiserver::object_storage::error::Result<String> {
+        Ok(format!("etag-{part_number}"))
+    }
+
+    async fn complete_multipart_upload(
+        &self,
+        _key: &str,
+        _upload_id: &str,
+        _parts: Vec<(u32, String)>,
+    ) -> apiserver::object_storage::error::Result<()> {
+        Ok(())
+    }
+
+    async fn abort_multipart_upload(
+        &self,
+        _key: &str,
+        _upload_id: &str,
+    ) -> apiserver::object_storage::error::Result<()> {
+        Ok(())
     }
 }

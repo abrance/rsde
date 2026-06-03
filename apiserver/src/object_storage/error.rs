@@ -9,6 +9,7 @@ pub enum ObjectStorageError {
     InvalidInput(String),
     StorageError(String),
     UploadError(String),
+    UploadSessionIncomplete(String),
     DownloadError(String),
     DeleteError(String),
     NotFound(String),
@@ -22,6 +23,9 @@ impl std::fmt::Display for ObjectStorageError {
             ObjectStorageError::InvalidInput(msg) => write!(f, "Invalid input: {msg}"),
             ObjectStorageError::StorageError(msg) => write!(f, "Storage error: {msg}"),
             ObjectStorageError::UploadError(msg) => write!(f, "Upload error: {msg}"),
+            ObjectStorageError::UploadSessionIncomplete(msg) => {
+                write!(f, "Upload session incomplete: {msg}")
+            }
             ObjectStorageError::DownloadError(msg) => write!(f, "Download error: {msg}"),
             ObjectStorageError::DeleteError(msg) => write!(f, "Delete error: {msg}"),
             ObjectStorageError::NotFound(msg) => write!(f, "Not found: {msg}"),
@@ -54,6 +58,11 @@ impl IntoResponse for ObjectStorageError {
                 StatusCode::BAD_REQUEST,
                 msg,
                 ApiErrorCode::Status(StatusCode::BAD_REQUEST.as_u16()),
+            ),
+            ObjectStorageError::UploadSessionIncomplete(msg) => (
+                StatusCode::CONFLICT,
+                msg,
+                ApiErrorCode::Kind("upload_session_incomplete".to_string()),
             ),
             ObjectStorageError::DownloadError(msg) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

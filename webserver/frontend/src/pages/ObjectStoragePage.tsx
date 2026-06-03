@@ -48,6 +48,26 @@ type CreateUploadTokenData = {
     upload_url: string
 }
 
+type CreateUploadSessionData = {
+    session_id: string
+    object_key: string
+    upload_key: string
+    part_size_bytes: number
+    part_count: number
+    expires_at: string
+}
+
+type UploadSessionPartData = {
+    session_id: string
+    part_number: number
+    uploaded_parts: number[]
+}
+
+type CompleteUploadSessionData = {
+    session_id: string
+    object_key: string
+}
+
 type DownloadUrlData = {
     key: string
     download_url: string
@@ -60,6 +80,15 @@ type RecentUploadResult = {
     expiresAt?: string | null
     linkError?: string | null
 }
+
+type UploadProgressState = {
+    fileName: string
+    loadedBytes: number
+    totalBytes: number
+    progressPercent: number | null
+}
+
+const LARGE_FILE_UPLOAD_THRESHOLD_BYTES = 5 * 1024 * 1024
 
 const rootListData: ObjectListData = {
     current_prefix: '',
@@ -78,6 +107,51 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
     }
 
     return envelope.data
+}
+
+async function uploadWithProgress(
+    url: string,
+    formData: FormData,
+    onProgress: (loadedBytes: number, totalBytes: number, progressPercent: number | null) => void,
+): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+        const request = new XMLHttpRequest()
+        request.open('POST', url)
+        request.upload.onprogress = (event) => {
+            if (!event.lengthComputable) {
+                onProgress(0, 0, null)
+                return
+            }
+
+            const progressPercent = Math.min(100, Math.round((event.loaded / event.total) * 100))
+            onProgress(event.loaded, event.total, progressPercent)
+        }
+        request.onload = () => {
+            if (request.status >= 200 && request.status < 300) {
+                resolve()
+                return
+            }
+
+            reject(new Error(`上传失败：${request.status}`))
+        }
+        request.onerror = () => {
+            reject(new Error('上传失败：网络异常'))
+        }
+        request.send(formData)
+    })
+}
+
+async function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
+    if (typeof blob.arrayBuffer === 'function') {
+        return blob.arrayBuffer()
+    }
+
+    return await new Promise<ArrayBuffer>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result as ArrayBuffer)
+        reader.onerror = () => reject(reader.error ?? new Error('读取分片失败'))
+        reader.readAsArrayBuffer(blob)
+    })
 }
 
 function formatSize(size: number): string {
@@ -159,6 +233,7 @@ export default function ObjectStoragePage() {
     const [error, setError] = useState('')
     const [operationMessage, setOperationMessage] = useState('')
     const [recentUploadResult, setRecentUploadResult] = useState<RecentUploadResult | null>(null)
+    const [uploadProgress, setUploadProgress] = useState<UploadProgressState | null>(null)
 
     const breadcrumbs = useMemo(() => buildBreadcrumbs(currentPrefix), [currentPrefix])
     const hasObjects = listData.prefixes.length > 0 || listData.items.length > 0
@@ -208,6 +283,7 @@ export default function ObjectStoragePage() {
     const clearRecentUploadResult = () => {
         uploadRequestIdRef.current += 1
         setRecentUploadResult(null)
+        setUploadProgress(null)
     }
 
     const handleRefresh = () => {
@@ -356,43 +432,18 @@ export default function ObjectStoragePage() {
         fileInputRef.current?.click()
     }
 
-    const uploadFile = async (file: File) => {
-        const uploadRequestId = uploadRequestIdRef.current + 1
-        uploadRequestIdRef.current = uploadRequestId
-        const uploadPrefix = currentPrefix
-
-        setError('')
-        setOperationMessage('')
-        setRecentUploadResult(null)
-
-        try {
-            const requestBody = currentPrefix
-                ? { prefix: currentPrefix, filename: file.name }
-                : { filename: file.name }
-            const uploadData = await requestJson<CreateUploadTokenData>('/api/object-storage/upload-token', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(requestBody),
-            })
-
-            const formData = new FormData()
-            formData.append('token', uploadData.upload_token)
-            formData.append('key', uploadData.upload_key)
-            formData.append('file', file)
-
-            const uploadResponse = await fetch(uploadData.upload_url, {
-                method: 'POST',
-                body: formData,
-            })
-            if (!uploadResponse.ok) {
-                throw new Error(`上传失败：${uploadResponse.status}`)
+    const finalizeUploadedObject = useCallback(
+        async (uploadRequestId: number, uploadPrefix: string, objectKey: string) => {
+            if (uploadRequestIdRef.current !== uploadRequestId) {
+                return
             }
 
-            setOperationMessage(`已上传 ${uploadData.object_key}`)
+            setUploadProgress(null)
+            setOperationMessage(`已上传 ${objectKey}`)
 
             try {
                 const downloadData = await requestJson<DownloadUrlData>(
-                    `/api/object-storage/download-url?key=${encodeURIComponent(uploadData.object_key)}`,
+                    `/api/object-storage/download-url?key=${encodeURIComponent(objectKey)}`,
                 )
                 if (uploadRequestIdRef.current !== uploadRequestId) {
                     return
@@ -412,7 +463,7 @@ export default function ObjectStoragePage() {
 
                 const message = downloadError instanceof Error ? downloadError.message : '下载链接获取失败'
                 setRecentUploadResult({
-                    key: uploadData.object_key,
+                    key: objectKey,
                     downloadUrl: undefined,
                     expiresAt: null,
                     linkError: `下载链接获取失败：${message}`,
@@ -422,7 +473,122 @@ export default function ObjectStoragePage() {
             if (uploadRequestIdRef.current === uploadRequestId) {
                 await loadObjects(uploadPrefix)
             }
+        },
+        [loadObjects],
+    )
+
+    const uploadSmallFile = useCallback(
+        async (file: File, uploadRequestId: number, uploadPrefix: string) => {
+            const requestBody = currentPrefix
+                ? { prefix: currentPrefix, filename: file.name }
+                : { filename: file.name }
+            const uploadData = await requestJson<CreateUploadTokenData>('/api/object-storage/upload-token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody),
+            })
+
+            const formData = new FormData()
+            formData.append('token', uploadData.upload_token)
+            formData.append('key', uploadData.upload_key)
+            formData.append('file', file)
+
+            await uploadWithProgress(uploadData.upload_url, formData, (loadedBytes, totalBytes, progressPercent) => {
+                if (uploadRequestIdRef.current !== uploadRequestId) {
+                    return
+                }
+
+                setUploadProgress({
+                    fileName: file.name,
+                    loadedBytes,
+                    totalBytes,
+                    progressPercent,
+                })
+            })
+
+            await finalizeUploadedObject(uploadRequestId, uploadPrefix, uploadData.object_key)
+        },
+        [currentPrefix, finalizeUploadedObject],
+    )
+
+    const uploadLargeFileSession = useCallback(
+        async (file: File, uploadRequestId: number, uploadPrefix: string) => {
+            const requestBody = currentPrefix
+                ? { prefix: currentPrefix, filename: file.name, file_size_bytes: file.size }
+                : { filename: file.name, file_size_bytes: file.size }
+            const session = await requestJson<CreateUploadSessionData>('/api/object-storage/upload-sessions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody),
+            })
+
+            let uploadedBytes = 0
+            for (let index = 0; index < session.part_count; index += 1) {
+                const partNumber = index + 1
+                const start = index * session.part_size_bytes
+                const end = Math.min(file.size, start + session.part_size_bytes)
+                const chunk = file.slice(start, end)
+                const body = await blobToArrayBuffer(chunk)
+
+                await requestJson<UploadSessionPartData>(
+                    `/api/object-storage/upload-sessions/${encodeURIComponent(session.session_id)}/parts/${partNumber}`,
+                    {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/octet-stream' },
+                        body,
+                    },
+                )
+
+                if (uploadRequestIdRef.current !== uploadRequestId) {
+                    return
+                }
+
+                uploadedBytes = end
+                setUploadProgress({
+                    fileName: file.name,
+                    loadedBytes: uploadedBytes,
+                    totalBytes: file.size,
+                    progressPercent: file.size > 0 ? Math.min(100, Math.round((uploadedBytes / file.size) * 100)) : null,
+                })
+            }
+
+            const completed = await requestJson<CompleteUploadSessionData>(
+                `/api/object-storage/upload-sessions/${encodeURIComponent(session.session_id)}/complete`,
+                {
+                    method: 'POST',
+                },
+            )
+
+            await finalizeUploadedObject(uploadRequestId, uploadPrefix, completed.object_key)
+        },
+        [currentPrefix, finalizeUploadedObject],
+    )
+
+    const uploadFile = async (file: File) => {
+        const uploadRequestId = uploadRequestIdRef.current + 1
+        uploadRequestIdRef.current = uploadRequestId
+        const uploadPrefix = currentPrefix
+
+        setError('')
+        setOperationMessage('')
+        setRecentUploadResult(null)
+        setUploadProgress({
+            fileName: file.name,
+            loadedBytes: 0,
+            totalBytes: file.size,
+            progressPercent: file.size > 0 ? 0 : null,
+        })
+
+        try {
+            if (file.size > LARGE_FILE_UPLOAD_THRESHOLD_BYTES) {
+                await uploadLargeFileSession(file, uploadRequestId, uploadPrefix)
+            } else {
+                await uploadSmallFile(file, uploadRequestId, uploadPrefix)
+            }
         } catch (requestError) {
+            if (uploadRequestIdRef.current === uploadRequestId) {
+                setUploadProgress(null)
+            }
             const message = requestError instanceof Error ? requestError.message : '上传文件失败'
             setError(message)
         }
@@ -550,6 +716,22 @@ export default function ObjectStoragePage() {
 
             {error && <div className="object-storage-alert error">{error}</div>}
             {operationMessage && <div className="object-storage-alert">{operationMessage}</div>}
+            {uploadProgress && (
+                <section className="object-storage-upload-progress-card" aria-label="上传进度">
+                    <div className="object-storage-upload-progress-header">
+                        <h2>上传中</h2>
+                        <span>{uploadProgress.progressPercent === null ? '处理中' : `${uploadProgress.progressPercent}%`}</span>
+                    </div>
+                    <p className="object-storage-upload-progress-file">{uploadProgress.fileName}</p>
+                    <progress
+                        className="object-storage-upload-progress-bar"
+                        max={100}
+                        value={uploadProgress.progressPercent ?? undefined}
+                    >
+                        {uploadProgress.progressPercent === null ? undefined : uploadProgress.progressPercent}
+                    </progress>
+                </section>
+            )}
             {recentUploadResult && (
                 <section
                     className="object-storage-upload-result-card"

@@ -5,16 +5,18 @@ pub mod service;
 
 use axum::{
     Router,
-    extract::{Query, State},
+    body::Bytes,
+    extract::{Path, Query, State},
     response::Json,
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use dto::{
-    ApiResponse, CreateDirectoryRequest, CreateDirectoryResponse, CreateUploadTokenRequest,
+    ApiResponse, CompleteUploadSessionResponse, CreateDirectoryRequest, CreateDirectoryResponse,
+    CreateUploadSessionRequest, CreateUploadSessionResponse, CreateUploadTokenRequest,
     CreateUploadTokenResponse, DeleteObjectRequest, DeleteObjectResponse, DeleteObjectsRequest,
     DeleteObjectsResponse, DownloadUrlQuery, DownloadUrlResponse, HealthResponse, ListObjectsQuery,
     ListObjectsResponse, MoveObjectRequest, MoveObjectResponse, ObjectDetailQuery,
-    ObjectDetailResponse,
+    ObjectDetailResponse, UploadSessionPartResponse,
 };
 use error::Result;
 use qiniu::QiniuObjectStorageBackend;
@@ -113,6 +115,42 @@ async fn create_download_url(
     Ok(Json(success_response(response)))
 }
 
+async fn create_upload_session(
+    State(state): State<ObjectStorageState>,
+    Json(request): Json<CreateUploadSessionRequest>,
+) -> Result<Json<ApiResponse<CreateUploadSessionResponse>>> {
+    let response = state
+        .service
+        .create_upload_session(
+            request.prefix.as_deref(),
+            &request.filename,
+            request.file_size_bytes,
+            request.part_size_bytes,
+        )
+        .await?;
+    Ok(Json(success_response(response)))
+}
+
+async fn upload_session_part(
+    State(state): State<ObjectStorageState>,
+    Path((session_id, part_number)): Path<(String, u32)>,
+    body: Bytes,
+) -> Result<Json<ApiResponse<UploadSessionPartResponse>>> {
+    let response = state
+        .service
+        .upload_session_part(&session_id, part_number, body.to_vec())
+        .await?;
+    Ok(Json(success_response(response)))
+}
+
+async fn complete_upload_session(
+    State(state): State<ObjectStorageState>,
+    Path(session_id): Path<String>,
+) -> Result<Json<ApiResponse<CompleteUploadSessionResponse>>> {
+    let response = state.service.complete_upload_session(&session_id).await?;
+    Ok(Json(success_response(response)))
+}
+
 fn success_response<T: serde::Serialize>(data: T) -> ApiResponse<T> {
     ApiResponse {
         success: true,
@@ -145,6 +183,15 @@ pub fn create_routes_with_backend(
         .route("/objects/delete-batch", post(delete_objects))
         .route("/directories", post(create_directory))
         .route("/upload-token", post(create_upload_token))
+        .route("/upload-sessions", post(create_upload_session))
+        .route(
+            "/upload-sessions/:session_id/parts/:part_number",
+            put(upload_session_part),
+        )
+        .route(
+            "/upload-sessions/:session_id/complete",
+            post(complete_upload_session),
+        )
         .route("/download-url", get(create_download_url))
         .with_state(state)
 }
