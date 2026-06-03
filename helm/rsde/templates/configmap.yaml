@@ -78,6 +78,49 @@ data:
     {{- end }}
     {{- end }}
 
+    {{- if .Values.config.nodemanage }}
+    [nodemanage]
+    table_prefix = {{ .Values.config.nodemanage.table_prefix | default "node_" | quote }}
+    {{- with .Values.config.nodemanage.rsagent_package_url }}
+    rsagent_package_url = {{ . | quote }}
+    {{- end }}
+    install_root = {{ .Values.config.nodemanage.install_root | default "/opt/rsagent" | quote }}
+    register_callback_url = {{ .Values.config.nodemanage.register_callback_url | default "http://127.0.0.1:3000/api/nodes/agent/sync" | quote }}
+    register_wait_timeout_secs = {{ .Values.config.nodemanage.register_wait_timeout_secs | default 30 }}
+    ssh_connect_timeout_secs = {{ .Values.config.nodemanage.ssh_connect_timeout_secs | default 10 }}
+
+    {{- range .Values.config.nodemanage.install_plugins }}
+    [[nodemanage.install_plugins]]
+    name = {{ .name | quote }}
+    version = {{ .version | quote }}
+    {{- with .package_url }}
+    package_url = {{ . | quote }}
+    {{- end }}
+    {{- end }}
+
+    [nodemanage.heartbeat]
+    result_table_name = {{ .Values.config.nodemanage.heartbeat.result_table_name | default "nm_node_heartbeat" | quote }}
+    metric_name = {{ .Values.config.nodemanage.heartbeat.metric_name | default "nm_node_heartbeat" | quote }}
+    query_template = {{ .Values.config.nodemanage.heartbeat.query_template | default "query $metric_name where node_id = $node_id and agent_id = $agent_id and node_ip = $node_ip between $start_at and $end_at" | quote }}
+    storage_cluster = {{ .Values.config.nodemanage.heartbeat.storage_cluster | default "default" | quote }}
+    interval_seconds = {{ .Values.config.nodemanage.heartbeat.interval_seconds | default 60 }}
+    retention_days = {{ .Values.config.nodemanage.heartbeat.retention_days | default 7 }}
+    refresh_interval_secs = {{ .Values.config.nodemanage.heartbeat.refresh_interval_secs | default 60 }}
+    status_window_secs = {{ .Values.config.nodemanage.heartbeat.status_window_secs | default 300 }}
+
+    {{- with .Values.config.nodemanage.mysql }}
+    [nodemanage.mysql]
+    host = {{ .host | quote }}
+    port = {{ .port }}
+    user = {{ .user | quote }}
+    password = {{ .password | quote }}
+    database = {{ .database | quote }}
+    max_connections = {{ .max_connections }}
+    min_connections = {{ .min_connections }}
+    connect_timeout_secs = {{ .connect_timeout_secs }}
+    {{- end }}
+    {{- end }}
+
     {{- if .Values.config.prompt }}
     [prompt]
     table_prefix = {{ .Values.config.prompt.table_prefix | quote }}
