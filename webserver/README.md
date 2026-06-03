@@ -12,6 +12,8 @@ WebServer 的前端 UI 已合并到 `apiserver` 中，现在 `apiserver` 同时�
 
 ### 前端开发
 
+前端独立开发模式使用 Vite dev server：
+
 ```bash
 cd frontend
 
@@ -21,9 +23,24 @@ npm install
 # 启动开发服务器（默认端口 5173）
 npm run dev
 
+# 运行 lint
+npm run lint
+
+# 运行测试
+npm run test
+
 # 构建生产版本
 npm run build
+
+# 预览生产构建
+npm run preview
 ```
+
+说明：
+
+- Vite dev server 默认监听 `http://localhost:5173`。
+- 开发模式下，前端发往 `/api/*` 的请求会代理到 `http://localhost:3000`。
+- 这里的 `http://localhost:3000` 指向本地 `apiserver`，用于承接后端 API。
 
 ### 启动完整服务
 
@@ -37,6 +54,12 @@ cd ../..
 # 2. 启动 apiserver（会自动提供前端服务）
 cargo run -p apiserver --release
 ```
+
+完整服务模式说明：
+
+- 这里描述的是**集成运行模式**，不是 Vite dev server 模式。
+- 在该模式下，frontend 构建产物位于 `webserver/frontend/dist/`，并由 `apiserver` 在根路径提供静态文件服务。
+- 此时用户访问地址为 `http://localhost:3000`。
 
 访问 http://localhost:3000 即可看到前端界面。
 
@@ -60,3 +83,4 @@ webserver/
 - `GET /api/ocr/health` - 健康检查
 
 前端开发时，Vite 会自动代理 `/api/*` 请求到 `http://localhost:3000`。
+集成运行时，请求由 `apiserver` 直接处理，不再经过 Vite dev server。

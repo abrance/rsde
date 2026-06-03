@@ -35,6 +35,12 @@ cd ../..
 API_CONFIG="config.example.toml" cargo run -p apiserver --release
 ```
 
+说明：
+
+- 根 README 这里描述的是**集成运行模式**：先构建 frontend，再由 `apiserver` 提供静态文件与 `/api/*` 接口。
+- 集成运行模式下，访问地址为 `http://localhost:3000`。
+- 如果需要单独做前端页面开发，请查看 `webserver/README.md` 或 `webserver/frontend/README.md` 中的 Vite 开发模式说明。
+
 ## 使用场景
 
 - 对接企微数据，监控企微消息并在有相关消息时通知
