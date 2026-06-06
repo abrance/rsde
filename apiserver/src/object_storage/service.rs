@@ -281,6 +281,11 @@ impl ObjectStorageService {
                 "part_size_bytes must be greater than zero".to_string(),
             ));
         }
+        if part_size_bytes > MAX_PART_SIZE_BYTES {
+            return Err(ObjectStorageError::InvalidInput(format!(
+                "part_size_bytes exceeds maximum allowed size of {MAX_PART_SIZE_BYTES} bytes"
+            )));
+        }
 
         let part_count_u64 = file_size_bytes.div_ceil(part_size_bytes);
         let part_count = u32::try_from(part_count_u64).map_err(|_| {
@@ -611,6 +616,9 @@ fn ensure_valid_object_key(key: &str, field_name: &str) -> Result<()> {
 fn default_part_size_bytes() -> u64 {
     8 * 1024 * 1024
 }
+
+/// Maximum allowed part size (100 MB).
+const MAX_PART_SIZE_BYTES: u64 = 100 * 1024 * 1024;
 
 fn expires_at(ttl_secs: u64) -> String {
     (Utc::now() + ChronoDuration::seconds(ttl_secs as i64)).to_rfc3339()
