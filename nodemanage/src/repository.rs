@@ -7,9 +7,20 @@ use mysql_async::{Pool, Row, params, prelude::*};
 use tokio::sync::Mutex;
 
 use crate::{
-    BindingState, Node, NodeAgentBinding, NodeManageError, NodeStatus, PaginatedResult,
-    PaginationParams, Result,
+    BindingState, InstallTaskState, InstallTaskStep, Node, NodeAgentBinding, NodeInstallTask,
+    NodeManageError, NodeStatus, PaginatedResult, PaginationParams, Result,
 };
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct InstallTaskRequestContext {
+    request_host: Option<String>,
+    request_ssh_port: Option<u16>,
+    request_username: Option<String>,
+    request_rsagent_package_url: Option<String>,
+    request_install_root: Option<String>,
+    request_labels: Vec<String>,
+    request_plugin_names: Vec<String>,
+}
 
 #[async_trait]
 pub trait NodeRepository: Clone + Send + Sync + 'static {
@@ -18,6 +29,13 @@ pub trait NodeRepository: Clone + Send + Sync + 'static {
     async fn list(&self, pagination: PaginationParams) -> Result<PaginatedResult<Node>>;
     async fn update(&self, node: Node) -> Result<Node>;
     async fn delete(&self, id: &str) -> Result<bool>;
+    async fn create_install_task(&self, task: NodeInstallTask) -> Result<NodeInstallTask>;
+    async fn update_install_task(&self, task: NodeInstallTask) -> Result<NodeInstallTask>;
+    async fn get_install_task(&self, install_task_id: &str) -> Result<Option<NodeInstallTask>>;
+    async fn latest_install_task_by_node_id(
+        &self,
+        node_id: &str,
+    ) -> Result<Option<NodeInstallTask>>;
     async fn upsert_agent_binding(&self, binding: NodeAgentBinding) -> Result<NodeAgentBinding>;
     async fn agent_binding_by_agent_id(&self, agent_id: &str) -> Result<Option<NodeAgentBinding>>;
     async fn bound_agent_binding_by_node_id(
@@ -29,6 +47,7 @@ pub trait NodeRepository: Clone + Send + Sync + 'static {
 #[derive(Debug, Clone, Default)]
 pub struct MemoryNodeRepository {
     nodes: Arc<Mutex<HashMap<String, Node>>>,
+    install_tasks: Arc<Mutex<HashMap<String, NodeInstallTask>>>,
     bindings: Arc<Mutex<HashMap<String, NodeAgentBinding>>>,
 }
 
@@ -73,6 +92,39 @@ impl NodeRepository for MemoryNodeRepository {
         Ok(nodes.remove(id).is_some())
     }
 
+    async fn create_install_task(&self, task: NodeInstallTask) -> Result<NodeInstallTask> {
+        let mut tasks = self.install_tasks.lock().await;
+        tasks.insert(task.install_task_id.clone(), task.clone());
+        Ok(task)
+    }
+
+    async fn update_install_task(&self, task: NodeInstallTask) -> Result<NodeInstallTask> {
+        let mut tasks = self.install_tasks.lock().await;
+        tasks.insert(task.install_task_id.clone(), task.clone());
+        Ok(task)
+    }
+
+    async fn get_install_task(&self, install_task_id: &str) -> Result<Option<NodeInstallTask>> {
+        let tasks = self.install_tasks.lock().await;
+        Ok(tasks.get(install_task_id).cloned())
+    }
+
+    async fn latest_install_task_by_node_id(
+        &self,
+        node_id: &str,
+    ) -> Result<Option<NodeInstallTask>> {
+        let tasks = self.install_tasks.lock().await;
+        Ok(tasks
+            .values()
+            .filter(|task| task.node_id == node_id)
+            .cloned()
+            .max_by(|left, right| {
+                left.started_at
+                    .cmp(&right.started_at)
+                    .then_with(|| left.install_task_id.cmp(&right.install_task_id))
+            }))
+    }
+
     async fn upsert_agent_binding(&self, binding: NodeAgentBinding) -> Result<NodeAgentBinding> {
         let mut bindings = self.bindings.lock().await;
         bindings.insert(binding.agent_id.clone(), binding.clone());
@@ -102,16 +154,31 @@ impl NodeRepository for MemoryNodeRepository {
 pub struct MySqlNodeRepository {
     pool: Pool,
     table_name: String,
+    install_task_table_name: String,
     binding_table_name: String,
 }
 
 impl MySqlNodeRepository {
+    fn install_task_request_context_json(task: &NodeInstallTask) -> Result<String> {
+        serde_json::to_string(&InstallTaskRequestContext {
+            request_host: task.request_host.clone(),
+            request_ssh_port: task.request_ssh_port,
+            request_username: task.request_username.clone(),
+            request_rsagent_package_url: task.request_rsagent_package_url.clone(),
+            request_install_root: task.request_install_root.clone(),
+            request_labels: task.request_labels.clone(),
+            request_plugin_names: task.request_plugin_names.clone(),
+        })
+        .map_err(Into::into)
+    }
+
     pub async fn new(config: MysqlConfig, table_prefix: String) -> Result<Self> {
         let opts = mysql_async::Opts::from_url(&config.connection_url())
             .map_err(|err| NodeManageError::Storage(err.to_string()))?;
         let repository = Self {
             pool: Pool::new(opts),
             table_name: format!("{table_prefix}nodes"),
+            install_task_table_name: format!("{table_prefix}install_tasks"),
             binding_table_name: format!("{table_prefix}agent_bindings"),
         };
         repository.init_table().await?;
@@ -136,6 +203,27 @@ impl MySqlNodeRepository {
             self.table_name
         );
         conn.query_drop(create_nodes_table_sql)
+            .await
+            .map_err(|err| NodeManageError::Storage(err.to_string()))?;
+
+        let create_install_tasks_table_sql = format!(
+            r#"CREATE TABLE IF NOT EXISTS `{}` (
+                `install_task_id` VARCHAR(36) NOT NULL PRIMARY KEY,
+                `node_id` VARCHAR(255) NOT NULL,
+                `task_state` VARCHAR(32) NOT NULL,
+                `current_step` VARCHAR(64) NULL,
+                `error_code` VARCHAR(128) NULL,
+                `error_message` TEXT NULL,
+                `started_at` DATETIME(6) NOT NULL,
+                `finished_at` DATETIME(6) NULL,
+                `retryable` BOOLEAN NOT NULL,
+                `request_context` JSON NULL,
+                INDEX `idx_node_started_at` (`node_id`, `started_at`),
+                INDEX `idx_task_state` (`task_state`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"#,
+            self.install_task_table_name
+        );
+        conn.query_drop(create_install_tasks_table_sql)
             .await
             .map_err(|err| NodeManageError::Storage(err.to_string()))?;
 
@@ -211,6 +299,127 @@ impl MySqlNodeRepository {
         }
     }
 
+    fn install_task_state_as_str(task_state: &InstallTaskState) -> &'static str {
+        match task_state {
+            InstallTaskState::Pending => "pending",
+            InstallTaskState::Running => "running",
+            InstallTaskState::WaitingRegister => "waiting_register",
+            InstallTaskState::Succeeded => "succeeded",
+            InstallTaskState::Failed => "failed",
+            InstallTaskState::Cancelled => "cancelled",
+        }
+    }
+
+    fn install_task_step_as_str(step: &InstallTaskStep) -> &'static str {
+        match step {
+            InstallTaskStep::PrepareInstall => "prepare_install",
+            InstallTaskStep::ResolveArtifacts => "resolve_artifacts",
+            InstallTaskStep::WriteRuntimeConfig => "write_runtime_config",
+            InstallTaskStep::UploadPackage => "upload_package",
+            InstallTaskStep::RunInstallScript => "run_install_script",
+            InstallTaskStep::StartAgent => "start_agent",
+            InstallTaskStep::WaitRegister => "wait_register",
+        }
+    }
+
+    fn parse_install_task_state(value: &str) -> Result<InstallTaskState> {
+        match value {
+            "pending" => Ok(InstallTaskState::Pending),
+            "running" => Ok(InstallTaskState::Running),
+            "waiting_register" => Ok(InstallTaskState::WaitingRegister),
+            "succeeded" => Ok(InstallTaskState::Succeeded),
+            "failed" => Ok(InstallTaskState::Failed),
+            "cancelled" => Ok(InstallTaskState::Cancelled),
+            _ => Err(NodeManageError::Storage(format!(
+                "unknown install task state: {value}"
+            ))),
+        }
+    }
+
+    fn parse_install_task_step(value: &str) -> Result<InstallTaskStep> {
+        match value {
+            "prepare_install" => Ok(InstallTaskStep::PrepareInstall),
+            "resolve_artifacts" => Ok(InstallTaskStep::ResolveArtifacts),
+            "write_runtime_config" => Ok(InstallTaskStep::WriteRuntimeConfig),
+            "upload_package" => Ok(InstallTaskStep::UploadPackage),
+            "run_install_script" => Ok(InstallTaskStep::RunInstallScript),
+            "start_agent" => Ok(InstallTaskStep::StartAgent),
+            "wait_register" => Ok(InstallTaskStep::WaitRegister),
+            _ => Err(NodeManageError::Storage(format!(
+                "unknown install task step: {value}"
+            ))),
+        }
+    }
+
+    fn row_to_install_task(&self, row: Row) -> Result<NodeInstallTask> {
+        let (
+            install_task_id,
+            node_id,
+            task_state,
+            current_step,
+            error_code,
+            error_message,
+            started_at,
+            finished_at,
+            retryable,
+            request_context,
+        ): (
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            NaiveDateTime,
+            Option<NaiveDateTime>,
+            bool,
+            Option<String>,
+        ) = mysql_async::from_row_opt(row)
+            .map_err(|err| NodeManageError::Storage(err.to_string()))?;
+
+        let request_context = request_context
+            .map(|value| serde_json::from_str::<InstallTaskRequestContext>(&value))
+            .transpose()?;
+
+        Ok(NodeInstallTask {
+            install_task_id,
+            node_id,
+            task_state: Self::parse_install_task_state(&task_state)?,
+            current_step: current_step
+                .as_deref()
+                .map(Self::parse_install_task_step)
+                .transpose()?,
+            error_code,
+            error_message,
+            started_at: DateTime::from_naive_utc_and_offset(started_at, Utc),
+            finished_at: finished_at.map(|value| DateTime::from_naive_utc_and_offset(value, Utc)),
+            retryable,
+            request_host: request_context
+                .as_ref()
+                .and_then(|ctx| ctx.request_host.clone()),
+            request_ssh_port: request_context
+                .as_ref()
+                .and_then(|ctx| ctx.request_ssh_port),
+            request_username: request_context
+                .as_ref()
+                .and_then(|ctx| ctx.request_username.clone()),
+            request_rsagent_package_url: request_context
+                .as_ref()
+                .and_then(|ctx| ctx.request_rsagent_package_url.clone()),
+            request_install_root: request_context
+                .as_ref()
+                .and_then(|ctx| ctx.request_install_root.clone()),
+            request_labels: request_context
+                .as_ref()
+                .map(|ctx| ctx.request_labels.clone())
+                .unwrap_or_default(),
+            request_plugin_names: request_context
+                .as_ref()
+                .map(|ctx| ctx.request_plugin_names.clone())
+                .unwrap_or_default(),
+        })
+    }
+
     fn row_to_binding(&self, row: Row) -> Result<NodeAgentBinding> {
         let (
             agent_id,
@@ -251,6 +460,11 @@ impl MySqlNodeRepository {
         let mut conn = self.connection().await?;
         let drop_bindings_table_sql = format!("DROP TABLE IF EXISTS `{}`", self.binding_table_name);
         conn.query_drop(drop_bindings_table_sql)
+            .await
+            .map_err(|err| NodeManageError::Storage(err.to_string()))?;
+        let drop_install_tasks_table_sql =
+            format!("DROP TABLE IF EXISTS `{}`", self.install_task_table_name);
+        conn.query_drop(drop_install_tasks_table_sql)
             .await
             .map_err(|err| NodeManageError::Storage(err.to_string()))?;
         let drop_nodes_table_sql = format!("DROP TABLE IF EXISTS `{}`", self.table_name);
@@ -393,6 +607,109 @@ impl NodeRepository for MySqlNodeRepository {
             .await
             .map_err(|err| NodeManageError::Storage(err.to_string()))?;
         Ok(result.affected_rows() > 0)
+    }
+
+    async fn create_install_task(&self, task: NodeInstallTask) -> Result<NodeInstallTask> {
+        let mut conn = self.connection().await?;
+        let insert_sql = format!(
+            r#"INSERT INTO `{}` (
+                install_task_id, node_id, task_state, current_step, error_code, error_message,
+                started_at, finished_at, retryable, request_context
+               ) VALUES (
+                :install_task_id, :node_id, :task_state, :current_step, :error_code, :error_message,
+                :started_at, :finished_at, :retryable, :request_context
+               )"#,
+            self.install_task_table_name
+        );
+        let request_context = Self::install_task_request_context_json(&task)?;
+        conn.exec_drop(
+            insert_sql,
+            params! {
+                "install_task_id" => &task.install_task_id,
+                "node_id" => &task.node_id,
+                "task_state" => Self::install_task_state_as_str(&task.task_state),
+                "current_step" => task.current_step.as_ref().map(Self::install_task_step_as_str),
+                "error_code" => &task.error_code,
+                "error_message" => &task.error_message,
+                "started_at" => task.started_at.naive_utc(),
+                "finished_at" => task.finished_at.map(|value| value.naive_utc()),
+                "retryable" => task.retryable,
+                "request_context" => &request_context,
+            },
+        )
+        .await
+        .map_err(|err| NodeManageError::Storage(err.to_string()))?;
+        Ok(task)
+    }
+
+    async fn update_install_task(&self, task: NodeInstallTask) -> Result<NodeInstallTask> {
+        let mut conn = self.connection().await?;
+        let update_sql = format!(
+            r#"UPDATE `{}`
+               SET node_id = :node_id,
+                   task_state = :task_state,
+                   current_step = :current_step,
+                   error_code = :error_code,
+                   error_message = :error_message,
+                   started_at = :started_at,
+                   finished_at = :finished_at,
+                   retryable = :retryable,
+                    request_context = :request_context
+                WHERE install_task_id = :install_task_id"#,
+            self.install_task_table_name
+        );
+        let request_context = Self::install_task_request_context_json(&task)?;
+        let result = conn
+            .exec_iter(
+                update_sql,
+                params! {
+                    "install_task_id" => &task.install_task_id,
+                    "node_id" => &task.node_id,
+                    "task_state" => Self::install_task_state_as_str(&task.task_state),
+                    "current_step" => task.current_step.as_ref().map(Self::install_task_step_as_str),
+                    "error_code" => &task.error_code,
+                    "error_message" => &task.error_message,
+                    "started_at" => task.started_at.naive_utc(),
+                    "finished_at" => task.finished_at.map(|value| value.naive_utc()),
+                    "retryable" => task.retryable,
+                    "request_context" => &request_context,
+                },
+            )
+            .await
+            .map_err(|err| NodeManageError::Storage(err.to_string()))?;
+        if result.affected_rows() == 0 {
+            return Err(NodeManageError::NotFound(task.install_task_id));
+        }
+        Ok(task)
+    }
+
+    async fn get_install_task(&self, install_task_id: &str) -> Result<Option<NodeInstallTask>> {
+        let mut conn = self.connection().await?;
+        let select_sql = format!(
+            "SELECT install_task_id, node_id, task_state, current_step, error_code, error_message, started_at, finished_at, retryable, request_context FROM `{}` WHERE install_task_id = :install_task_id",
+            self.install_task_table_name
+        );
+        let row = conn
+            .exec_first(select_sql, params! { "install_task_id" => install_task_id })
+            .await
+            .map_err(|err| NodeManageError::Storage(err.to_string()))?;
+        row.map(|value| self.row_to_install_task(value)).transpose()
+    }
+
+    async fn latest_install_task_by_node_id(
+        &self,
+        node_id: &str,
+    ) -> Result<Option<NodeInstallTask>> {
+        let mut conn = self.connection().await?;
+        let select_sql = format!(
+            "SELECT install_task_id, node_id, task_state, current_step, error_code, error_message, started_at, finished_at, retryable, request_context FROM `{}` WHERE node_id = :node_id ORDER BY started_at DESC, install_task_id DESC LIMIT 1",
+            self.install_task_table_name
+        );
+        let row = conn
+            .exec_first(select_sql, params! { "node_id" => node_id })
+            .await
+            .map_err(|err| NodeManageError::Storage(err.to_string()))?;
+        row.map(|value| self.row_to_install_task(value)).transpose()
     }
 
     async fn upsert_agent_binding(&self, binding: NodeAgentBinding) -> Result<NodeAgentBinding> {

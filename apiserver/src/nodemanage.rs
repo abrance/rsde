@@ -11,8 +11,10 @@ use datalink_engine::{
 };
 use nodemanage::{
     AgentSyncRequest, AgentSyncResponse, CreateNode, InstallNodeRequest, InstallPlugin,
-    MemoryNodeRepository, MySqlNodeRepository, Node, NodeManageError, NodeManager, NodeStatus,
-    NoopRsAgentInstaller, PaginatedResult, PaginationParams, RemoteExecutor,
+    MemoryNodeRepository, MySqlNodeRepository, Node, NodeBindingView, NodeDetail,
+    NodeInstallTaskReceipt, NodeInstallTaskView, NodeManageError, NodeManageErrorCode, NodeManager,
+    NodeStatus, NodeStatusBatchItem, NodeSummary, NoopRsAgentInstaller, PaginatedResult,
+    PaginationParams, RebindNodeRequest, RebindNodeResponse, RemoteExecutor,
     RepositoryRegistrationWaiter, ShellRemoteExecutor, SshRsAgentInstaller, UpdateNode,
 };
 use query_engine::{InMemoryHeartbeatStore, QueryEngine};
@@ -103,6 +105,96 @@ impl AppNodeManager {
         match self {
             Self::Memory(manager) => manager.sync_agent(req).await,
             Self::Mysql(manager) => manager.sync_agent(req).await,
+        }
+    }
+
+    async fn list_node_summaries(
+        &self,
+        pagination: PaginationParams,
+    ) -> Result<PaginatedResult<NodeSummary>, NodeManageError> {
+        match self {
+            Self::Memory(manager) => manager.list_node_summaries(pagination).await,
+            Self::Mysql(manager) => manager.list_node_summaries(pagination).await,
+        }
+    }
+
+    async fn node_detail(
+        &self,
+        node_id: &str,
+        heartbeat_data_link_id: Option<String>,
+        result_table_name: Option<String>,
+    ) -> Result<NodeDetail, NodeManageError> {
+        match self {
+            Self::Memory(manager) => {
+                manager
+                    .node_detail(node_id, heartbeat_data_link_id, result_table_name)
+                    .await
+            }
+            Self::Mysql(manager) => {
+                manager
+                    .node_detail(node_id, heartbeat_data_link_id, result_table_name)
+                    .await
+            }
+        }
+    }
+
+    async fn batch_status(
+        &self,
+        node_ids: Vec<String>,
+    ) -> Result<Vec<NodeStatusBatchItem>, NodeManageError> {
+        match self {
+            Self::Memory(manager) => manager.batch_status(node_ids).await,
+            Self::Mysql(manager) => manager.batch_status(node_ids).await,
+        }
+    }
+
+    async fn binding_by_node_id(
+        &self,
+        node_id: &str,
+    ) -> Result<Option<NodeBindingView>, NodeManageError> {
+        let detail = self.node_detail(node_id, None, None).await?;
+        Ok(detail.binding)
+    }
+
+    async fn install_task(
+        &self,
+        install_task_id: &str,
+    ) -> Result<Option<NodeInstallTaskView>, NodeManageError> {
+        match self {
+            Self::Memory(manager) => manager.install_task(install_task_id).await,
+            Self::Mysql(manager) => manager.install_task(install_task_id).await,
+        }
+    }
+
+    async fn latest_install_task(
+        &self,
+        node_id: &str,
+    ) -> Result<Option<NodeInstallTaskView>, NodeManageError> {
+        match self {
+            Self::Memory(manager) => manager.latest_install_task(node_id).await,
+            Self::Mysql(manager) => manager.latest_install_task(node_id).await,
+        }
+    }
+
+    async fn submit_install_task(
+        &self,
+        node_id: &str,
+        request: &InstallNodeRequest,
+    ) -> Result<NodeInstallTaskReceipt, NodeManageError> {
+        match self {
+            Self::Memory(manager) => manager.submit_install_task(node_id, request).await,
+            Self::Mysql(manager) => manager.submit_install_task(node_id, request).await,
+        }
+    }
+
+    async fn rebind_node(
+        &self,
+        node_id: &str,
+        request: &RebindNodeRequest,
+    ) -> Result<RebindNodeResponse, NodeManageError> {
+        match self {
+            Self::Memory(manager) => manager.rebind_node(node_id, request).await,
+            Self::Mysql(manager) => manager.rebind_node(node_id, request).await,
         }
     }
 }
@@ -309,6 +401,24 @@ pub struct AgentSyncHttpResponse {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ApiResponse<T> {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<T>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<ApiErrorBody>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApiErrorBody {
+    pub code: &'static str,
+    pub message: String,
+    pub retryable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ListNodeQuery {
     #[serde(default = "default_page")]
@@ -322,6 +432,11 @@ pub struct UpdateStatusRequest {
     pub status: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct BatchStatusQuery {
+    pub node_ids: Option<String>,
+}
+
 fn default_page() -> u32 {
     1
 }
@@ -332,8 +447,14 @@ fn default_page_size() -> u32 {
 
 fn node_error(error: NodeManageError) -> (StatusCode, Json<NodeResponse>) {
     let status = match error {
-        NodeManageError::NotFound(_) => StatusCode::NOT_FOUND,
-        NodeManageError::InvalidInput(_) => StatusCode::BAD_REQUEST,
+        NodeManageError::NotFound(_)
+        | NodeManageError::InstallTaskNotFound(_)
+        | NodeManageError::BindingNotFound(_)
+        | NodeManageError::TargetAgentNotFound(_) => StatusCode::NOT_FOUND,
+        NodeManageError::RebindTargetAlreadyBound(_) => StatusCode::CONFLICT,
+        NodeManageError::InvalidRebindRequest(_) | NodeManageError::InvalidInput(_) => {
+            StatusCode::BAD_REQUEST
+        }
         NodeManageError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (
@@ -342,6 +463,38 @@ fn node_error(error: NodeManageError) -> (StatusCode, Json<NodeResponse>) {
             success: false,
             data: None,
             error: Some(error.to_string()),
+        }),
+    )
+}
+
+fn api_error<T>(error: NodeManageError) -> (StatusCode, Json<ApiResponse<T>>) {
+    let api_error = error.to_api_error();
+    let status = match api_error.code {
+        NodeManageErrorCode::NodeNotFound
+        | NodeManageErrorCode::InstallTaskNotFound
+        | NodeManageErrorCode::BindingNotFound
+        | NodeManageErrorCode::TargetAgentNotFound => StatusCode::NOT_FOUND,
+        NodeManageErrorCode::BindingConflict | NodeManageErrorCode::RebindTargetAlreadyBound => {
+            StatusCode::CONFLICT
+        }
+        NodeManageErrorCode::InvalidArgument
+        | NodeManageErrorCode::InvalidRebindRequest
+        | NodeManageErrorCode::InstallConfigInvalid
+        | NodeManageErrorCode::HeartbeatDatalinkNotReady
+        | NodeManageErrorCode::StatusQueryFailed => StatusCode::BAD_REQUEST,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (
+        status,
+        Json(ApiResponse {
+            success: false,
+            data: None,
+            error: Some(ApiErrorBody {
+                code: api_error.code.as_str(),
+                message: api_error.message,
+                retryable: api_error.retryable,
+                details: None,
+            }),
         }),
     )
 }
@@ -579,8 +732,14 @@ async fn sync_agent(
         })
         .map_err(|error| {
             let status = match error {
-                NodeManageError::NotFound(_) => StatusCode::NOT_FOUND,
-                NodeManageError::InvalidInput(_) => StatusCode::BAD_REQUEST,
+                NodeManageError::NotFound(_)
+                | NodeManageError::InstallTaskNotFound(_)
+                | NodeManageError::BindingNotFound(_)
+                | NodeManageError::TargetAgentNotFound(_) => StatusCode::NOT_FOUND,
+                NodeManageError::RebindTargetAlreadyBound(_) => StatusCode::CONFLICT,
+                NodeManageError::InvalidRebindRequest(_) | NodeManageError::InvalidInput(_) => {
+                    StatusCode::BAD_REQUEST
+                }
                 NodeManageError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
             };
             (
@@ -592,6 +751,240 @@ async fn sync_agent(
                 }),
             )
         })
+}
+
+async fn v1_create_node(
+    State(state): State<NodeManageState>,
+    Json(req): Json<CreateNode>,
+) -> Result<Json<ApiResponse<Node>>, (StatusCode, Json<ApiResponse<Node>>)> {
+    state
+        .manager
+        .create(req)
+        .await
+        .map(|node| {
+            Json(ApiResponse {
+                success: true,
+                data: Some(node),
+                error: None,
+            })
+        })
+        .map_err(api_error)
+}
+
+async fn v1_list_nodes(
+    State(state): State<NodeManageState>,
+    Query(query): Query<ListNodeQuery>,
+) -> Result<
+    Json<ApiResponse<PaginatedResult<NodeSummary>>>,
+    (StatusCode, Json<ApiResponse<PaginatedResult<NodeSummary>>>),
+> {
+    state
+        .manager
+        .list_node_summaries(PaginationParams::new(query.page, query.page_size))
+        .await
+        .map(|data| {
+            Json(ApiResponse {
+                success: true,
+                data: Some(data),
+                error: None,
+            })
+        })
+        .map_err(api_error)
+}
+
+async fn v1_get_node(
+    State(state): State<NodeManageState>,
+    Path(node_id): Path<String>,
+) -> Result<Json<ApiResponse<NodeDetail>>, (StatusCode, Json<ApiResponse<NodeDetail>>)> {
+    state
+        .manager
+        .node_detail(
+            &node_id,
+            state.heartbeat_data_link_id.clone(),
+            Some(state.config.heartbeat.result_table_name.clone()),
+        )
+        .await
+        .map(|data| {
+            Json(ApiResponse {
+                success: true,
+                data: Some(data),
+                error: None,
+            })
+        })
+        .map_err(api_error)
+}
+
+async fn v1_batch_status(
+    State(state): State<NodeManageState>,
+    Query(query): Query<BatchStatusQuery>,
+) -> Result<
+    Json<ApiResponse<Vec<NodeStatusBatchItem>>>,
+    (StatusCode, Json<ApiResponse<Vec<NodeStatusBatchItem>>>),
+> {
+    let node_ids = query
+        .node_ids
+        .unwrap_or_default()
+        .split(',')
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .collect();
+    state
+        .manager
+        .batch_status(node_ids)
+        .await
+        .map(|data| {
+            Json(ApiResponse {
+                success: true,
+                data: Some(data),
+                error: None,
+            })
+        })
+        .map_err(api_error)
+}
+
+async fn v1_get_binding(
+    State(state): State<NodeManageState>,
+    Path(node_id): Path<String>,
+) -> Result<Json<ApiResponse<NodeBindingView>>, (StatusCode, Json<ApiResponse<NodeBindingView>>)> {
+    match state
+        .manager
+        .binding_by_node_id(&node_id)
+        .await
+        .map_err(api_error)?
+    {
+        Some(data) => Ok(Json(ApiResponse {
+            success: true,
+            data: Some(data),
+            error: None,
+        })),
+        None => Err(api_error(NodeManageError::BindingNotFound(node_id))),
+    }
+}
+
+async fn v1_get_install_task(
+    State(state): State<NodeManageState>,
+    Path(install_task_id): Path<String>,
+) -> Result<
+    Json<ApiResponse<NodeInstallTaskView>>,
+    (StatusCode, Json<ApiResponse<NodeInstallTaskView>>),
+> {
+    match state
+        .manager
+        .install_task(&install_task_id)
+        .await
+        .map_err(api_error)?
+    {
+        Some(data) => Ok(Json(ApiResponse {
+            success: true,
+            data: Some(data),
+            error: None,
+        })),
+        None => Err(api_error(NodeManageError::InstallTaskNotFound(
+            install_task_id,
+        ))),
+    }
+}
+
+async fn v1_get_latest_install_task(
+    State(state): State<NodeManageState>,
+    Path((node_id, _suffix)): Path<(String, String)>,
+) -> Result<
+    Json<ApiResponse<Option<NodeInstallTaskView>>>,
+    (StatusCode, Json<ApiResponse<Option<NodeInstallTaskView>>>),
+> {
+    if state
+        .manager
+        .get(&node_id)
+        .await
+        .map_err(api_error)?
+        .is_none()
+    {
+        return Err(api_error(NodeManageError::NotFound(node_id)));
+    }
+
+    state
+        .manager
+        .latest_install_task(&node_id)
+        .await
+        .map(|data| {
+            Json(ApiResponse {
+                success: true,
+                data: Some(data),
+                error: None,
+            })
+        })
+        .map_err(api_error)
+}
+
+async fn v1_install_node(
+    State(state): State<NodeManageState>,
+    Path(node_id): Path<String>,
+    Json(mut req): Json<InstallNodeRequest>,
+) -> Result<
+    (StatusCode, Json<ApiResponse<NodeInstallTaskReceipt>>),
+    (StatusCode, Json<ApiResponse<NodeInstallTaskReceipt>>),
+> {
+    req = apply_install_request_defaults(&state.config, req);
+    state
+        .manager
+        .submit_install_task(&node_id, &req)
+        .await
+        .map(|data| {
+            (
+                StatusCode::ACCEPTED,
+                Json(ApiResponse {
+                    success: true,
+                    data: Some(data),
+                    error: None,
+                }),
+            )
+        })
+        .map_err(api_error)
+}
+
+async fn v1_sync_agent(
+    State(state): State<NodeManageState>,
+    Json(req): Json<AgentSyncRequest>,
+) -> Result<Json<ApiResponse<AgentSyncResponse>>, (StatusCode, Json<ApiResponse<AgentSyncResponse>>)>
+{
+    state
+        .manager
+        .sync_agent(req)
+        .await
+        .map(|mut data| {
+            if let Some(heartbeat_data_link_id) = state.heartbeat_data_link_id.as_ref() {
+                data.heartbeat_config.data_link_id = heartbeat_data_link_id.clone();
+                data.heartbeat_config.interval_secs = state.config.heartbeat.interval_seconds;
+            }
+            Json(ApiResponse {
+                success: true,
+                data: Some(data),
+                error: None,
+            })
+        })
+        .map_err(api_error)
+}
+
+async fn v1_rebind_node(
+    State(state): State<NodeManageState>,
+    Path(node_id): Path<String>,
+    Json(req): Json<RebindNodeRequest>,
+) -> Result<
+    Json<ApiResponse<RebindNodeResponse>>,
+    (StatusCode, Json<ApiResponse<RebindNodeResponse>>),
+> {
+    state
+        .manager
+        .rebind_node(&node_id, &req)
+        .await
+        .map(|data| {
+            Json(ApiResponse {
+                success: true,
+                data: Some(data),
+                error: None,
+            })
+        })
+        .map_err(api_error)
 }
 
 pub async fn create_routes(config: config::nodemanage::NodeManageConfig) -> anyhow::Result<Router> {
@@ -609,6 +1002,21 @@ pub async fn create_routes_with_shared_memory(
     Ok(build_router(state))
 }
 
+pub async fn create_v1_routes(
+    config: config::nodemanage::NodeManageConfig,
+) -> anyhow::Result<Router> {
+    let state = NodeManageState::new(config).await?;
+    Ok(build_v1_router(state))
+}
+
+pub async fn create_v1_routes_with_shared_memory(
+    config: config::nodemanage::NodeManageConfig,
+    shared: SharedMemoryRuntime,
+) -> anyhow::Result<Router> {
+    let state = NodeManageState::new_with_shared_memory(config, Some(shared)).await?;
+    Ok(build_v1_router(state))
+}
+
 fn build_router(state: NodeManageState) -> Router {
     Router::new()
         .route("/health", get(health_check))
@@ -622,5 +1030,23 @@ fn build_router(state: NodeManageState) -> Router {
         .route("/node/:id/status/refresh", post(refresh_status))
         .route("/install", post(install_node))
         .route("/agent/sync", post(sync_agent))
+        .with_state(state)
+}
+
+fn build_v1_router(state: NodeManageState) -> Router {
+    Router::new()
+        .route("/nodes", post(v1_create_node))
+        .route("/nodes", get(v1_list_nodes))
+        .route("/agents/sync", post(v1_sync_agent))
+        .route("/nodes/:node_id", get(v1_get_node))
+        .route("/nodes/status:batch", get(v1_batch_status))
+        .route("/nodes/:node_id/binding", get(v1_get_binding))
+        .route("/install-tasks/:install_task_id", get(v1_get_install_task))
+        .route(
+            "/nodes/:node_id/install-tasks:latest",
+            get(v1_get_latest_install_task),
+        )
+        .route("/nodes/:node_id/install", post(v1_install_node))
+        .route("/nodes/:node_id/rebind", post(v1_rebind_node))
         .with_state(state)
 }

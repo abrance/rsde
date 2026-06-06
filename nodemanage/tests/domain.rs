@@ -1,7 +1,8 @@
 use nodemanage::{
     AgentRegistration, BindingState, CreateNode, InstallNodeRequest, InstallPlugin, InstallStatus,
-    MemoryNodeRepository, Node, NodeAgentBinding, NodeRepository, NodeStatus, NodeStatusSnapshot,
-    OnlineStatus, PaginationParams,
+    InstallTaskState, InstallTaskStep, MemoryNodeRepository, Node, NodeAgentBinding,
+    NodeInstallTask, NodeRepository, NodeStatus, NodeStatusSnapshot, OnlineStatus,
+    PaginationParams,
 };
 
 #[test]
@@ -49,6 +50,42 @@ async fn memory_repository_can_create_fetch_and_list_nodes() {
     assert_eq!(fetched, Some(created));
     assert_eq!(listed.total, 1);
     assert_eq!(listed.items.len(), 1);
+}
+
+#[tokio::test]
+async fn memory_repository_persists_install_tasks_and_latest_lookup() {
+    let repository = MemoryNodeRepository::default();
+    let mut older = NodeInstallTask::new("node-1".to_string());
+    older.task_state = InstallTaskState::Failed;
+    older.current_step = Some(InstallTaskStep::RunInstallScript);
+    older.error_code = Some("INSTALL_EXECUTION_FAILED".to_string());
+    older.retryable = true;
+
+    let mut newer = NodeInstallTask::new("node-1".to_string());
+    newer.task_state = InstallTaskState::Running;
+    newer.current_step = Some(InstallTaskStep::StartAgent);
+
+    repository.create_install_task(older.clone()).await.unwrap();
+    repository.create_install_task(newer.clone()).await.unwrap();
+
+    let loaded = repository
+        .get_install_task(&older.install_task_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let latest = repository
+        .latest_install_task_by_node_id("node-1")
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(loaded.install_task_id, older.install_task_id);
+    assert_eq!(
+        loaded.error_code.as_deref(),
+        Some("INSTALL_EXECUTION_FAILED")
+    );
+    assert_eq!(latest.install_task_id, newer.install_task_id);
+    assert_eq!(latest.current_step, Some(InstallTaskStep::StartAgent));
 }
 
 #[test]
@@ -143,6 +180,67 @@ fn install_status_serializes_supported_states() {
     assert_eq!(InstallStatus::WaitingRegister.as_str(), "waiting_register");
     assert_eq!(InstallStatus::Registered.as_str(), "registered");
     assert_eq!(InstallStatus::Failed.as_str(), "failed");
+}
+
+#[test]
+fn node_install_task_serializes_frozen_protocol_shape() {
+    let mut task = NodeInstallTask::new("node-1".to_string());
+    task.task_state = InstallTaskState::WaitingRegister;
+    task.current_step = Some(InstallTaskStep::WaitRegister);
+    task.error_code = Some("AGENT_REGISTRATION_TIMEOUT".to_string());
+    task.error_message = Some("agent did not register in time".to_string());
+    task.retryable = true;
+
+    let json = serde_json::to_value(&task).unwrap();
+
+    assert_eq!(json["node_id"], "node-1");
+    assert_eq!(json["task_state"], "waiting_register");
+    assert_eq!(json["current_step"], "wait_register");
+    assert_eq!(json["error_code"], "AGENT_REGISTRATION_TIMEOUT");
+    assert_eq!(json["retryable"], true);
+    assert!(json["install_task_id"].is_string());
+}
+
+#[test]
+fn node_install_task_latest_wins_by_started_at_then_id() {
+    let older = NodeInstallTask::new("node-1".to_string());
+    let newer = NodeInstallTask::new("node-1".to_string());
+
+    assert!(newer.started_at >= older.started_at);
+    assert_ne!(newer.install_task_id, older.install_task_id);
+}
+
+#[test]
+fn node_install_task_can_record_install_request_context() {
+    let request = InstallNodeRequest {
+        host: "10.0.0.9".to_string(),
+        ssh_port: 22,
+        username: "root".to_string(),
+        password: Some("secret".to_string()),
+        private_key: None,
+        rsagent_package_url: "https://example.com/rsagent.tar.gz".to_string(),
+        install_root: "/opt/rsagent".to_string(),
+        register_callback_url: "http://127.0.0.1:3000/api/nodes/agent/sync".to_string(),
+        plugins: vec![InstallPlugin {
+            name: "metrics".to_string(),
+            version: "1.2.3".to_string(),
+            package_url: Some("https://example.com/plugins/metrics.tar.gz".to_string()),
+        }],
+        labels: vec!["edge".to_string()],
+    };
+
+    let task = NodeInstallTask::new("node-1".to_string()).with_install_request(&request);
+
+    assert_eq!(task.request_host.as_deref(), Some("10.0.0.9"));
+    assert_eq!(task.request_ssh_port, Some(22));
+    assert_eq!(task.request_username.as_deref(), Some("root"));
+    assert_eq!(
+        task.request_rsagent_package_url.as_deref(),
+        Some("https://example.com/rsagent.tar.gz")
+    );
+    assert_eq!(task.request_install_root.as_deref(), Some("/opt/rsagent"));
+    assert_eq!(task.request_labels, vec!["edge".to_string()]);
+    assert_eq!(task.request_plugin_names, vec!["metrics".to_string()]);
 }
 
 #[test]

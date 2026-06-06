@@ -12,14 +12,17 @@ pub use bootstrap::{
     RegistrationWaiter, RemoteExecutor, RepositoryRegistrationWaiter, RsAgentInstaller,
     ShellRemoteExecutor, SshAuth, SshConnectionRequest, SshRsAgentInstaller,
 };
-pub use error::{NodeManageError, Result};
+pub use error::{NodeManageApiError, NodeManageError, NodeManageErrorCode, Result};
 pub use models::{
-    BindingState, CreateNode, Node, NodeAgentBinding, NodeStatus, NodeStatusSnapshot, OnlineStatus,
-    PaginatedResult, PaginationParams, UpdateNode,
+    BindingState, CreateNode, InstallTaskState, InstallTaskStep, Node, NodeAgentBinding,
+    NodeInstallTask, NodeStatus, NodeStatusSnapshot, OnlineStatus, PaginatedResult,
+    PaginationParams, UpdateNode,
 };
 pub use protocol::{
     AgentRegistration, AgentRegistry, AgentRunMode, AgentSyncRequest, AgentSyncResponse,
-    HeartbeatConfig, JobManageConfig, SyncBindingState, TaskFilterDefaults,
+    HeartbeatConfig, HeartbeatRef, InstallRequestSummary, JobManageConfig, NodeBindingView,
+    NodeDetail, NodeInstallTaskReceipt, NodeInstallTaskView, NodeStatusBatchItem, NodeStatusView,
+    NodeSummary, RebindNodeRequest, RebindNodeResponse, SyncBindingState, TaskFilterDefaults,
 };
 pub use repository::{MemoryNodeRepository, MySqlNodeRepository, NodeRepository};
 pub use service::NodeManager;

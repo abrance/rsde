@@ -116,6 +116,98 @@ impl<T> PaginatedResult<T> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallTaskState {
+    Pending,
+    Running,
+    WaitingRegister,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallTaskStep {
+    PrepareInstall,
+    ResolveArtifacts,
+    WriteRuntimeConfig,
+    UploadPackage,
+    RunInstallScript,
+    StartAgent,
+    WaitRegister,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NodeInstallTask {
+    pub install_task_id: String,
+    pub node_id: String,
+    pub task_state: InstallTaskState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_step: Option<InstallTaskStep>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    pub started_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<DateTime<Utc>>,
+    pub retryable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_ssh_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_rsagent_package_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_install_root: Option<String>,
+    #[serde(default)]
+    pub request_labels: Vec<String>,
+    #[serde(default)]
+    pub request_plugin_names: Vec<String>,
+}
+
+impl NodeInstallTask {
+    pub fn new(node_id: String) -> Self {
+        Self {
+            install_task_id: Uuid::new_v4().to_string(),
+            node_id,
+            task_state: InstallTaskState::Pending,
+            current_step: None,
+            error_code: None,
+            error_message: None,
+            started_at: Utc::now(),
+            finished_at: None,
+            retryable: false,
+            request_host: None,
+            request_ssh_port: None,
+            request_username: None,
+            request_rsagent_package_url: None,
+            request_install_root: None,
+            request_labels: vec![],
+            request_plugin_names: vec![],
+        }
+    }
+
+    pub fn with_install_request(mut self, request: &crate::bootstrap::InstallNodeRequest) -> Self {
+        self.request_host = Some(request.host.clone());
+        self.request_ssh_port = Some(request.ssh_port);
+        self.request_username = Some(request.username.clone());
+        self.request_rsagent_package_url = Some(request.rsagent_package_url.clone());
+        self.request_install_root = Some(request.install_root.clone());
+        self.request_labels = request.labels.clone();
+        self.request_plugin_names = request
+            .plugins
+            .iter()
+            .map(|plugin| plugin.name.clone())
+            .collect();
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum BindingState {
     Bound,
