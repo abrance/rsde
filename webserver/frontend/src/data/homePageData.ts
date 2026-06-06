@@ -62,6 +62,18 @@ export const toolsData: ToolCardData[] = [
             '过滤与检索',
         ],
     },
+    {
+        name: 'NodeManage',
+        path: '/node-manage',
+        icon: '🖥️',
+        description: '节点管理 (Agent Lifecycle) 工作台',
+        features: [
+            '节点列表与状态查看',
+            '节点详情追踪',
+            'Agent 绑定与解绑',
+            '安装任务下发',
+        ],
+    },
 ]
 
 export interface FeatureCardData {

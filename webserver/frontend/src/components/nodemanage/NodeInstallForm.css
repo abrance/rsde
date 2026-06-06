@@ -1,0 +1,66 @@
+.node-install-form {
+    margin-top: 1rem;
+}
+
+.node-install-form h3 {
+    margin-top: 0;
+    margin-bottom: 1rem;
+    font-size: 1.1rem;
+}
+
+.node-install-form .form-group {
+    margin-bottom: 1rem;
+}
+
+.node-install-form label {
+    display: block;
+    margin-bottom: 0.25rem;
+    font-weight: 500;
+}
+
+.node-install-form input[type="text"],
+.node-install-form input[type="password"],
+.node-install-form textarea {
+    width: 100%;
+    padding: 0.5rem;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-sizing: border-box;
+}
+
+.node-install-form .form-actions {
+    margin-top: 1.5rem;
+    text-align: right;
+}
+
+.node-install-form button[type="submit"] {
+    padding: 0.5rem 1rem;
+    background-color: #0066cc;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.node-install-form button[type="submit"]:disabled {
+    background-color: #999;
+    cursor: not-allowed;
+}
+
+.node-install-form .validation-errors {
+    margin-bottom: 1rem;
+    padding: 0.75rem;
+    background-color: #fff3f3;
+    border: 1px solid #ffcccc;
+    border-radius: 4px;
+}
+
+.node-install-form .error-text {
+    color: #cc0000;
+    font-size: 0.9rem;
+    margin-bottom: 0.25rem;
+}
+
+.node-install-form .error-text:last-child {
+    margin-bottom: 0;
+}

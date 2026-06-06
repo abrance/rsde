@@ -1,0 +1,89 @@
+.node-manage-page {
+  padding: 1rem;
+}
+
+.summary-cards {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.card {
+  padding: 1rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #f9f9f9;
+  min-width: 120px;
+}
+
+.filter-toolbar {
+  margin-bottom: 1rem;
+}
+
+.filter-toolbar input {
+  padding: 0.5rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  width: 250px;
+}
+
+.node-list {
+  margin-bottom: 2rem;
+}
+
+.node-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.node-table th, .node-table td {
+  border: 1px solid #eee;
+  padding: 0.75rem;
+  text-align: left;
+}
+
+.node-table th {
+  background-color: #f4f4f4;
+}
+
+.node-table tr {
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.node-table tr:hover {
+  background-color: #fafafa;
+}
+
+.node-table tr.selected-row {
+  background-color: #e6f7ff;
+}
+
+.detail-panel {
+  margin-top: 2rem;
+  border: 1px solid #ccc;
+  padding: 1.5rem;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.error-message {
+  color: #d32f2f;
+  background: #ffebee;
+  padding: 0.75rem;
+  border-radius: 4px;
+  margin-bottom: 1rem;
+  border: 1px solid #ef9a9a;
+}
+
+.node-manage-actions {
+    margin-top: 1rem;
+}
+
+.install-receipt-banner {
+    background-color: #d4edda;
+    border-color: #c3e6cb;
+    color: #155724;
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
