@@ -6,7 +6,7 @@ pub mod service;
 use axum::{
     Router,
     body::Bytes,
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     response::Json,
     routing::{get, post, put},
 };
@@ -22,6 +22,9 @@ use error::Result;
 use qiniu::QiniuObjectStorageBackend;
 use service::{ObjectStorageBackend, ObjectStorageService};
 use std::sync::Arc;
+
+/// Maximum allowed part size for multipart upload (100 MB).
+const MAX_PART_SIZE_BYTES: usize = 100 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct ObjectStorageState {
@@ -186,7 +189,7 @@ pub fn create_routes_with_backend(
         .route("/upload-sessions", post(create_upload_session))
         .route(
             "/upload-sessions/:session_id/parts/:part_number",
-            put(upload_session_part),
+            put(upload_session_part).layer(DefaultBodyLimit::max(MAX_PART_SIZE_BYTES)),
         )
         .route(
             "/upload-sessions/:session_id/complete",
