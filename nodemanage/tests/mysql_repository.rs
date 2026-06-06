@@ -1,8 +1,9 @@
 use chrono::{Duration, Utc};
 use config::mysql::MysqlConfig;
 use nodemanage::{
-    AgentRegistration, BindingState, MySqlNodeRepository, Node, NodeAgentBinding, NodeManager,
-    NodeRepository, NodeStatus, NoopRsAgentInstaller, PaginationParams,
+    AgentRegistration, BindingState, InstallTaskState, InstallTaskStep, MySqlNodeRepository, Node,
+    NodeAgentBinding, NodeInstallTask, NodeManager, NodeRepository, NodeStatus,
+    NoopRsAgentInstaller, PaginationParams,
 };
 use std::env;
 use uuid::Uuid;
@@ -219,4 +220,43 @@ async fn mysql_repository_keeps_stale_history_while_loading_only_current_bound_b
     assert_eq!(by_node, bound_binding);
     assert_eq!(stale.binding_state, BindingState::Stale);
     assert_eq!(stale.unbind_reason, Some("rotated".to_string()));
+}
+
+#[tokio::test]
+#[ignore = "requires reachable MySQL test environment; run with --ignored and MYSQL_* overrides if needed"]
+async fn mysql_repository_persists_install_tasks_and_latest_lookup() {
+    let repository = test_repository().await;
+
+    let mut older = NodeInstallTask::new("node-mysql-1".to_string());
+    older.task_state = InstallTaskState::Failed;
+    older.current_step = Some(InstallTaskStep::RunInstallScript);
+    older.error_code = Some("INSTALL_EXECUTION_FAILED".to_string());
+    older.error_message = Some("failed to run install script".to_string());
+    older.retryable = true;
+
+    let mut newer = NodeInstallTask::new("node-mysql-1".to_string());
+    newer.task_state = InstallTaskState::Running;
+    newer.current_step = Some(InstallTaskStep::StartAgent);
+
+    repository.create_install_task(older.clone()).await.unwrap();
+    repository.create_install_task(newer.clone()).await.unwrap();
+
+    let loaded = repository
+        .get_install_task(&older.install_task_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let latest = repository
+        .latest_install_task_by_node_id("node-mysql-1")
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(loaded.install_task_id, older.install_task_id);
+    assert_eq!(
+        loaded.error_code.as_deref(),
+        Some("INSTALL_EXECUTION_FAILED")
+    );
+    assert_eq!(latest.install_task_id, newer.install_task_id);
+    assert_eq!(latest.current_step, Some(InstallTaskStep::StartAgent));
 }
