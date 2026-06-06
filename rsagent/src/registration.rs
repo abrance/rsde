@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use nodemanage::{
-    AgentRunMode, AgentSyncResponse, HeartbeatConfig, JobManageConfig, SyncBindingState,
+    AgentRunMode, AgentSyncRequest, AgentSyncResponse, HeartbeatConfig, JobManageConfig,
+    SyncBindingState,
 };
 
 use crate::config::AgentRuntimeConfig;
@@ -90,10 +91,10 @@ impl AgentRuntimeState {
 
     pub fn apply_sync_response(&mut self, response: AgentSyncResponse) {
         self.binding_state = Some(response.binding_state.clone());
-        self.last_sync_error = None;
-        self.degraded = false;
 
         if response.accepted {
+            self.last_sync_error = None;
+            self.degraded = false;
             self.local_node_id = Some(response.bound_node_id.clone());
             self.base_config.node_id = self.local_node_id.clone();
             self.config_version = Some(response.config_version.clone());
@@ -103,6 +104,8 @@ impl AgentRuntimeState {
         }
 
         self.loops_enabled = false;
+        self.degraded = false;
+        self.last_sync_error = response.rejection_reason.clone();
     }
 
     pub fn record_temporary_sync_failure(&mut self, error: String) {
@@ -142,9 +145,21 @@ impl AgentRuntimeState {
         self.effective_config.as_ref()
     }
 
+    pub fn last_sync_error(&self) -> Option<&str> {
+        self.last_sync_error.as_deref()
+    }
+
     pub fn sync_client(&self) -> crate::clients::nodemanage::NodeManageSyncClient {
         crate::clients::nodemanage::NodeManageSyncClient::new(
             self.base_config.nodemanage_sync_url.clone(),
+        )
+    }
+
+    pub fn build_sync_request(&self, identity: &AgentIdentity) -> AgentSyncRequest {
+        crate::clients::nodemanage::NodeManageSyncClient::build_request(
+            &self.base_config,
+            identity,
+            self.config_version().map(ToString::to_string),
         )
     }
 }

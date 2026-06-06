@@ -224,6 +224,8 @@ fn test_runtime_state_conflict_rejection_keeps_existing_binding_and_disables_loo
     assert_eq!(state.config_version(), Some("cfg-stable"));
     assert_eq!(state.binding_state(), Some(&SyncBindingState::Conflict));
     assert!(!state.loops_enabled());
+    assert!(!state.is_degraded());
+    assert_eq!(state.last_sync_error(), Some("binding conflict"));
 }
 
 #[test]
@@ -242,8 +244,90 @@ fn test_runtime_state_unbound_rejection_keeps_process_alive_without_loops() {
 
     assert!(state.process_alive());
     assert!(!state.loops_enabled());
+    assert!(!state.is_degraded());
     assert_eq!(state.binding_state(), Some(&SyncBindingState::Unbound));
     assert_eq!(state.local_node_id(), None);
+    assert_eq!(state.last_sync_error(), Some("agent not yet bound"));
+}
+
+#[test]
+fn test_runtime_state_explicit_rejection_clears_temporary_degraded_state() {
+    let config = sample_runtime_config(Some("node-001"));
+    let mut state = AgentRuntimeState::new(config);
+    state.apply_sync_response(sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-001",
+        "cfg-healthy",
+        None,
+    ));
+
+    state.record_temporary_sync_failure("timeout".to_string());
+    assert!(state.is_degraded());
+    assert_eq!(state.last_sync_error(), Some("timeout"));
+
+    state.apply_sync_response(sample_response(
+        false,
+        AgentRunMode::Idle,
+        SyncBindingState::Conflict,
+        "node-other",
+        "cfg-other",
+        Some("binding conflict"),
+    ));
+
+    assert!(!state.loops_enabled());
+    assert!(!state.is_degraded());
+    assert_eq!(state.binding_state(), Some(&SyncBindingState::Conflict));
+    assert_eq!(state.last_sync_error(), Some("binding conflict"));
+    assert_eq!(state.config_version(), Some("cfg-healthy"));
+}
+
+#[test]
+fn test_runtime_state_replaces_effective_config_as_whole_snapshot() {
+    let config = sample_runtime_config(Some("node-001"));
+    let mut state = AgentRuntimeState::new(config);
+    state.apply_sync_response(sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-001",
+        "cfg-v1",
+        None,
+    ));
+
+    let mut updated = sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-001",
+        "cfg-v2",
+        None,
+    );
+    updated.heartbeat_config.data_link_id = "dl-002".to_string();
+    updated.heartbeat_config.vm_base_url = "http://vm-2".to_string();
+    updated.heartbeat_config.interval_secs = 45;
+    updated.job_manage_config.version = "jm-v2".to_string();
+    updated.job_manage_config.base_url = "http://job-manage-v2".to_string();
+    updated.job_manage_config.task_filter_defaults.states = vec!["queued".to_string()];
+    updated.sync_interval_secs = 99;
+    updated.task_sync_interval_secs = 77;
+
+    state.apply_sync_response(updated);
+
+    let effective = state.effective_config().unwrap();
+    assert_eq!(effective.config_version, "cfg-v2");
+    assert_eq!(effective.heartbeat_config.data_link_id, "dl-002");
+    assert_eq!(effective.heartbeat_config.vm_base_url, "http://vm-2");
+    assert_eq!(effective.heartbeat_config.interval_secs, 45);
+    assert_eq!(effective.job_manage_config.version, "jm-v2");
+    assert_eq!(effective.job_manage_config.base_url, "http://job-manage-v2");
+    assert_eq!(
+        effective.job_manage_config.task_filter_defaults.states,
+        vec!["queued".to_string()]
+    );
+    assert_eq!(effective.sync_interval_secs, 99);
+    assert_eq!(effective.task_sync_interval_secs, 77);
 }
 
 #[test]
