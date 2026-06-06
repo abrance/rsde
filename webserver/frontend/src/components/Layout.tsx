@@ -69,6 +69,12 @@ export default function Layout({ children }: LayoutProps) {
                             >
                                 JobManage
                             </Link>
+                            <Link
+                                to="/node-manage"
+                                className={`nav-link ${isActive('/node-manage') ? 'active' : ''}`}
+                            >
+                                NodeManage
+                            </Link>
                         </nav>
                     </div>
                 </div>

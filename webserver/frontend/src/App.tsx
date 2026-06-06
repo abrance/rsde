@@ -8,6 +8,7 @@ import AnyboxPage from './pages/AnyboxPage'
 import PromptPage from './pages/PromptPage'
 import ObjectStoragePage from './pages/ObjectStoragePage'
 import JobManagePage from './pages/JobManagePage'
+import NodeManagePage from './pages/NodeManagePage'
 import './App.css'
 
 function App() {
@@ -23,6 +24,7 @@ function App() {
                     <Route path="/rsync" element={<RsyncPage />} />
                     <Route path="/object-storage" element={<ObjectStoragePage />} />
                     <Route path="/job-manage" element={<JobManagePage />} />
+                    <Route path="/node-manage" element={<NodeManagePage />} />
                 </Routes>
             </Layout>
         </Router>
