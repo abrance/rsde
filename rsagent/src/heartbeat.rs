@@ -83,6 +83,15 @@ where
         self.degraded
     }
 
+    pub fn reset(&mut self) {
+        self.last_sent_at = None;
+        self.degraded = false;
+    }
+
+    pub fn recover(&mut self) {
+        self.degraded = false;
+    }
+
     pub fn into_transport(self) -> T {
         self.transport
     }

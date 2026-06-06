@@ -80,6 +80,46 @@ fn heartbeat_reporter_marks_itself_degraded_after_write_failure() {
     assert!(error.to_string().contains("temporary write failure"));
 }
 
+#[test]
+fn heartbeat_reporter_reset_clears_last_sent_at_and_degraded_state() {
+    let state = synced_runtime_state(60);
+    let identity = sample_identity();
+    let timestamp = Utc.with_ymd_and_hms(2025, 1, 2, 3, 4, 5).unwrap();
+    let mut reporter = HeartbeatReporter::new(RecordingTransport::default());
+
+    reporter
+        .tick(timestamp, &state, "agt-001", &identity)
+        .unwrap();
+    reporter.reset();
+
+    let next = reporter
+        .tick(
+            timestamp + Duration::seconds(1),
+            &state,
+            "agt-001",
+            &identity,
+        )
+        .unwrap();
+
+    assert!(matches!(next, HeartbeatTick::Sent { .. }));
+    assert!(!reporter.is_degraded());
+}
+
+#[test]
+fn heartbeat_reporter_recover_clears_degraded_without_requiring_config_change() {
+    let state = synced_runtime_state(60);
+    let identity = sample_identity();
+    let timestamp = Utc.with_ymd_and_hms(2025, 1, 2, 3, 4, 5).unwrap();
+    let mut reporter = HeartbeatReporter::new(FailingTransport);
+
+    let _ = reporter.tick(timestamp, &state, "agt-001", &identity);
+    assert!(reporter.is_degraded());
+
+    reporter.recover();
+
+    assert!(!reporter.is_degraded());
+}
+
 #[derive(Debug, Default)]
 struct RecordingTransport {
     requests: Vec<RecordedRequest>,
