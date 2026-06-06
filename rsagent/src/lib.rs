@@ -1,7 +1,9 @@
 pub mod bootstrap;
 pub mod clients;
 pub mod config;
+pub mod config_sync;
 pub mod executor;
 pub mod heartbeat;
 pub mod registration;
+pub mod runtime_coordinator;
 pub mod task_sync;
