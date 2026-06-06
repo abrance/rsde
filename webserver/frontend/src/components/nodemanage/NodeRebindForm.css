@@ -1,0 +1,80 @@
+.node-rebind-form {
+  margin-top: 1rem;
+}
+
+.node-rebind-form h3 {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+  font-size: 1.1rem;
+  color: #d32f2f;
+}
+
+.rebind-help {
+  font-size: 0.85rem;
+  color: #666;
+  margin-bottom: 1rem;
+}
+
+.rebind-error {
+  padding: 0.5rem;
+  margin-bottom: 1rem;
+  background-color: #fee;
+  border-left: 4px solid #d32f2f;
+  color: #c62828;
+  font-size: 0.9rem;
+}
+
+.rebind-success {
+  padding: 0.5rem;
+  margin-bottom: 1rem;
+  background-color: #e8f5e9;
+  border-left: 4px solid #2e7d32;
+  color: #1b5e20;
+  font-size: 0.9rem;
+}
+
+.node-rebind-form .form-group {
+  margin-bottom: 1rem;
+}
+
+.node-rebind-form label {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+
+.node-rebind-form input[type="text"] {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  box-sizing: border-box;
+}
+
+.node-rebind-form .form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.node-rebind-form .btn-danger {
+  background-color: #d32f2f;
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.node-rebind-form .btn-danger:hover:not(:disabled) {
+  background-color: #c62828;
+}
+
+.node-rebind-form .btn-danger:disabled {
+  background-color: #ef9a9a;
+  cursor: not-allowed;
+}
