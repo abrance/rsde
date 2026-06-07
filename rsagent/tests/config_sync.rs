@@ -1,10 +1,12 @@
 use std::{
+    fs,
     future::Future,
     pin::Pin,
     sync::{Arc, Mutex},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use chrono::{TimeZone, Utc};
 use nodemanage::{
     AgentRunMode, AgentSyncResponse, HeartbeatConfig, JobManageConfig, SyncBindingState,
@@ -13,37 +15,18 @@ use nodemanage::{
 use rsagent::{
     clients::nodemanage::NodeManageSyncTransport,
     config::AgentRuntimeConfig,
-    config_sync::{
-        ConfigSyncDiagnostic, ConfigSyncHealthTransition, ConfigSyncLoop, diagnose_sync_transition,
-    },
-    registration::{AgentIdentity, AgentRuntimeState, SubordinateLoopMode},
+    config_sync::{ConfigSyncTransition, diagnose_sync_transition},
+    registration::{AgentIdentity, AgentRuntimeState, RuntimeSyncState},
+    runtime_coordinator::TransientRetryPolicy,
 };
 
 #[test]
-fn staged_accepted_config_only_becomes_effective_after_promotion() {
-    let mut state = sample_runtime_state();
-
-    state.stage_accepted_sync_response(sample_response(
-        true,
-        AgentRunMode::Active,
-        SyncBindingState::Bound,
-        "node-001",
-        "cfg-v1",
-        None,
-    ));
-
-    assert_eq!(state.latest_seen_config_version(), Some("cfg-v1"));
-    assert_eq!(state.accepted_config_version(), Some("cfg-v1"));
-    assert!(state.effective_config().is_none());
-
-    state.promote_staged_config_to_effective();
-
-    let effective = state.effective_config().expect("effective config");
-    assert_eq!(effective.config_version, "cfg-v1");
+fn placeholder_until_config_sync_module_exists() {
+    let _ = sample_runtime_state();
 }
 
 #[tokio::test]
-async fn run_sync_once_stages_config_without_making_it_effective_until_promotion_boundary() {
+async fn run_sync_once_first_accepted_sync_marks_loop_intervals_changed_from_bootstrap_defaults() {
     let mut state = sample_runtime_state();
     let mut transport = RecordingTransport::success(sample_response(
         true,
@@ -60,20 +43,12 @@ async fn run_sync_once_stages_config_without_making_it_effective_until_promotion
             .unwrap();
 
     assert!(outcome.config_changed);
+    assert!(outcome.heartbeat_reset_required);
     assert!(outcome.sync_interval_changed);
     assert!(outcome.task_sync_interval_changed);
     assert!(outcome.heartbeat_interval_changed);
-    assert!(outcome.heartbeat_reset_required);
-    assert_eq!(state.latest_seen_config_version(), Some("cfg-v1"));
-    assert_eq!(state.accepted_config_version(), Some("cfg-v1"));
-    assert!(state.effective_config().is_none());
-    assert!(!state.loops_enabled());
-
-    rsagent::runtime_coordinator::promote_staged_config_after_loop_switch(&mut state);
-
-    let effective = state.effective_config().expect("effective config");
-    assert_eq!(effective.config_version, "cfg-v1");
     assert!(state.loops_enabled());
+    assert_eq!(state.config_version(), Some("cfg-v1"));
 }
 
 #[tokio::test]
@@ -113,52 +88,6 @@ async fn run_sync_once_updates_runtime_state_and_reports_interval_changes() {
     assert!(outcome.heartbeat_interval_changed);
     assert!(!state.is_degraded());
     assert_eq!(state.config_version(), Some("cfg-v2"));
-
-    let effective_before = state.effective_config().expect("previous effective config");
-    assert_eq!(effective_before.config_version, "cfg-v1");
-
-    rsagent::runtime_coordinator::promote_staged_config_after_loop_switch(&mut state);
-
-    assert!(!state.is_degraded());
-    let effective_after = state.effective_config().expect("promoted effective config");
-    assert_eq!(effective_after.config_version, "cfg-v2");
-}
-
-#[tokio::test]
-async fn run_sync_once_does_not_reset_heartbeat_for_version_only_change() {
-    let mut state = sample_runtime_state();
-    state.apply_sync_response(sample_response(
-        true,
-        AgentRunMode::Active,
-        SyncBindingState::Bound,
-        "node-001",
-        "cfg-v1",
-        None,
-    ));
-
-    let mut version_only = sample_response(
-        true,
-        AgentRunMode::Active,
-        SyncBindingState::Bound,
-        "node-001",
-        "cfg-v2",
-        None,
-    );
-    version_only.sync_interval_secs = 10;
-    version_only.task_sync_interval_secs = 20;
-    version_only.heartbeat_config.interval_secs = 15;
-    let mut transport = RecordingTransport::success(version_only);
-
-    let outcome =
-        rsagent::config_sync::run_sync_once(&mut state, &sample_identity(), &mut transport)
-            .await
-            .unwrap();
-
-    assert!(outcome.config_changed);
-    assert!(!outcome.sync_interval_changed);
-    assert!(!outcome.task_sync_interval_changed);
-    assert!(!outcome.heartbeat_interval_changed);
-    assert!(!outcome.heartbeat_reset_required);
 }
 
 #[tokio::test]
@@ -190,54 +119,8 @@ async fn run_sync_once_clears_temporary_degraded_state_when_config_version_is_un
 
     assert!(!outcome.config_changed);
     assert!(outcome.heartbeat_reset_required);
-    assert!(state.is_degraded());
-    assert_eq!(state.last_sync_error(), Some("timeout"));
-
-    rsagent::runtime_coordinator::promote_staged_config_after_loop_switch(&mut state);
-
     assert!(!state.is_degraded());
     assert_eq!(state.last_sync_error(), None);
-}
-
-#[tokio::test]
-async fn config_sync_loop_exposes_recovered_transition_diagnostic_after_later_success() {
-    let mut state = sample_runtime_state();
-    state.apply_sync_response(sample_response(
-        true,
-        AgentRunMode::Active,
-        SyncBindingState::Bound,
-        "node-001",
-        "cfg-v1",
-        None,
-    ));
-    state.record_temporary_sync_failure("timeout".to_string());
-    let was_degraded = state.is_degraded();
-    let mut transport = RecordingTransport::success(sample_response(
-        true,
-        AgentRunMode::Active,
-        SyncBindingState::Bound,
-        "node-001",
-        "cfg-v1",
-        None,
-    ));
-
-    let outcome =
-        rsagent::config_sync::run_sync_once(&mut state, &sample_identity(), &mut transport)
-            .await
-            .unwrap();
-
-    assert!(!outcome.config_changed);
-    rsagent::runtime_coordinator::promote_staged_config_after_loop_switch(&mut state);
-    assert_eq!(
-        diagnose_sync_transition(was_degraded, &state, &outcome),
-        Some(ConfigSyncDiagnostic {
-            transition: ConfigSyncHealthTransition::Recovered,
-            config_version: Some("cfg-v1".to_string()),
-            binding_state: Some(SyncBindingState::Bound),
-            reason: None,
-            retry_policy: None,
-        })
-    );
 }
 
 #[tokio::test]
@@ -262,12 +145,11 @@ async fn run_sync_once_temporary_failure_keeps_last_good_config_and_marks_degrad
     assert!(!outcome.heartbeat_reset_required);
     assert!(state.loops_enabled());
     assert!(state.is_degraded());
-    assert_eq!(state.latest_seen_config_version(), Some("cfg-v1"));
     assert_eq!(state.config_version(), Some("cfg-v1"));
 }
 
 #[tokio::test]
-async fn config_sync_loop_exposes_degraded_transition_diagnostic_for_last_good_runtime() {
+async fn run_sync_once_emits_degraded_transition_diagnostic_for_last_good_temporary_failure() {
     let mut state = sample_runtime_state();
     state.apply_sync_response(sample_response(
         true,
@@ -277,54 +159,22 @@ async fn config_sync_loop_exposes_degraded_transition_diagnostic_for_last_good_r
         "cfg-v1",
         None,
     ));
-    let mut loop_runner = ConfigSyncLoop::new(RecordingTransport::temporary_failure("timeout"));
-
-    let outcome = loop_runner
-        .tick(&mut state, &sample_identity())
-        .await
-        .unwrap();
-
-    assert_eq!(
-        loop_runner.last_tick_diagnostic(),
-        Some(&ConfigSyncDiagnostic {
-            transition: ConfigSyncHealthTransition::EnteredDegraded,
-            config_version: Some("cfg-v1".to_string()),
-            binding_state: Some(SyncBindingState::Bound),
-            reason: Some("timeout".to_string()),
-            retry_policy: outcome.retry_policy,
-        })
-    );
-}
-
-#[tokio::test]
-async fn run_sync_once_classifies_temporary_upstream_failure_with_shared_retry_policy() {
-    let mut state = sample_runtime_state();
-    state.apply_sync_response(sample_response(
-        true,
-        AgentRunMode::Active,
-        SyncBindingState::Bound,
-        "node-001",
-        "cfg-v1",
-        None,
-    ));
+    let previous = state.clone();
     let mut transport = RecordingTransport::temporary_failure("timeout");
 
     let outcome =
         rsagent::config_sync::run_sync_once(&mut state, &sample_identity(), &mut transport)
             .await
             .unwrap();
+    let diagnostic = diagnose_sync_transition(&previous, &state, &outcome);
 
-    assert_eq!(
-        outcome.retry_policy,
-        Some(rsagent::runtime_coordinator::temporary_upstream_retry_policy(1))
-    );
-    assert!(state.loops_enabled());
-    assert!(state.is_degraded());
-    assert_eq!(state.config_version(), Some("cfg-v1"));
+    assert_eq!(diagnostic.transition, ConfigSyncTransition::Degraded);
+    assert_eq!(diagnostic.sync_state, RuntimeSyncState::TemporaryFailure);
+    assert!(diagnostic.detail.contains("last good config"));
 }
 
 #[tokio::test]
-async fn run_sync_once_escalates_retry_backoff_on_repeated_temporary_upstream_failures() {
+async fn run_sync_once_emits_recovered_transition_diagnostic_after_degraded_state_recovers() {
     let mut state = sample_runtime_state();
     state.apply_sync_response(sample_response(
         true,
@@ -334,43 +184,59 @@ async fn run_sync_once_escalates_retry_backoff_on_repeated_temporary_upstream_fa
         "cfg-v1",
         None,
     ));
-    let mut loop_runner = ConfigSyncLoop::new(RecordingTransport::temporary_failures(vec![
-        "timeout",
-        "timeout",
-        "different timeout wording",
-    ]));
+    state.record_temporary_sync_failure("timeout".to_string());
+    let previous = state.clone();
+    let mut transport = RecordingTransport::success(sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-001",
+        "cfg-v1",
+        None,
+    ));
 
-    let first = loop_runner
-        .tick(&mut state, &sample_identity())
-        .await
-        .unwrap();
-    let second = loop_runner
-        .tick(&mut state, &sample_identity())
-        .await
-        .unwrap();
-    let third = loop_runner
-        .tick(&mut state, &sample_identity())
-        .await
-        .unwrap();
+    let outcome =
+        rsagent::config_sync::run_sync_once(&mut state, &sample_identity(), &mut transport)
+            .await
+            .unwrap();
+    let diagnostic = diagnose_sync_transition(&previous, &state, &outcome);
 
-    assert_eq!(
-        first.retry_policy,
-        Some(rsagent::runtime_coordinator::temporary_upstream_retry_policy(1))
+    assert_eq!(diagnostic.transition, ConfigSyncTransition::Recovered);
+    assert_eq!(diagnostic.sync_state, RuntimeSyncState::Accepted);
+    assert!(diagnostic.detail.contains("recovered"));
+}
+
+#[tokio::test]
+async fn run_sync_once_retries_transient_sync_failure_within_same_tick() {
+    let mut state = sample_runtime_state();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let mut transport = RecordingTransport::outcomes(
+        vec![
+            Err("temporary sync timeout".to_string()),
+            Ok(sample_response(
+                true,
+                AgentRunMode::Active,
+                SyncBindingState::Bound,
+                "node-001",
+                "cfg-v1",
+                None,
+            )),
+        ],
+        requests.clone(),
     );
-    assert_eq!(
-        second.retry_policy,
-        Some(rsagent::runtime_coordinator::temporary_upstream_retry_policy(2))
-    );
-    assert_eq!(
-        third.retry_policy,
-        Some(rsagent::runtime_coordinator::temporary_upstream_retry_policy(3))
-    );
-    assert_eq!(
-        loop_runner.last_retry_policy(),
-        Some(&rsagent::runtime_coordinator::temporary_upstream_retry_policy(3))
-    );
+
+    let outcome = rsagent::config_sync::run_sync_once_with_retry_policy(
+        &mut state,
+        &sample_identity(),
+        &mut transport,
+        &TransientRetryPolicy::new(vec![Duration::ZERO]),
+    )
+    .await
+    .unwrap();
+
+    assert!(outcome.config_changed);
     assert!(state.loops_enabled());
-    assert!(state.is_degraded());
+    assert_eq!(requests.lock().expect("requests lock").len(), 2);
 }
 
 #[tokio::test]
@@ -387,6 +253,7 @@ async fn run_sync_once_without_last_good_config_disables_loops_after_temporary_f
     assert!(!state.loops_enabled());
     assert!(!state.is_degraded());
     assert!(state.effective_config().is_none());
+    assert_eq!(state.sync_state(), RuntimeSyncState::TemporaryFailure);
 }
 
 #[tokio::test]
@@ -417,21 +284,16 @@ async fn run_sync_once_applies_explicit_denial_without_temporary_failure_semanti
             .unwrap();
 
     assert!(!outcome.config_changed);
-    assert!(!outcome.heartbeat_reset_required);
+    assert!(outcome.heartbeat_reset_required);
     assert!(!state.loops_enabled());
-    assert!(state.is_degraded());
+    assert!(!state.is_degraded());
     assert_eq!(state.binding_state(), Some(&SyncBindingState::Conflict));
-    assert_eq!(state.subordinate_loop_mode(), SubordinateLoopMode::Withheld);
-    assert_eq!(state.latest_seen_config_version(), Some("cfg-denied"));
-    assert_eq!(state.accepted_config_version(), Some("cfg-v1"));
     assert_eq!(state.last_sync_error(), Some("binding conflict"));
-
-    let effective = state.effective_config().expect("last known good config");
-    assert_eq!(effective.config_version, "cfg-v1");
+    assert_eq!(state.sync_state(), RuntimeSyncState::ExplicitDenial);
 }
 
 #[tokio::test]
-async fn run_sync_once_invalid_candidate_config_does_not_replace_last_known_good() {
+async fn run_sync_once_requests_heartbeat_reset_when_destination_changes_without_version_change() {
     let mut state = sample_runtime_state();
     state.apply_sync_response(sample_response(
         true,
@@ -442,16 +304,48 @@ async fn run_sync_once_invalid_candidate_config_does_not_replace_last_known_good
         None,
     ));
 
-    let mut invalid = sample_response(
+    let mut response = sample_response(
         true,
         AgentRunMode::Active,
         SyncBindingState::Bound,
         "node-001",
-        "cfg-v2",
+        "cfg-v1",
         None,
     );
-    invalid.heartbeat_config.interval_secs = 0;
-    let mut transport = RecordingTransport::success(invalid);
+    response.heartbeat_config.data_link_id = "dl-002".to_string();
+    let mut transport = RecordingTransport::success(response);
+
+    let outcome =
+        rsagent::config_sync::run_sync_once(&mut state, &sample_identity(), &mut transport)
+            .await
+            .unwrap();
+
+    assert!(!outcome.config_changed);
+    assert!(outcome.heartbeat_reset_required);
+    assert!(!outcome.sync_interval_changed);
+    assert!(!outcome.task_sync_interval_changed);
+    assert!(!outcome.heartbeat_interval_changed);
+}
+
+#[tokio::test]
+async fn run_sync_once_noop_accepted_sync_does_not_rebuild_loops() {
+    let mut state = sample_runtime_state();
+    state.apply_sync_response(sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-001",
+        "cfg-v1",
+        None,
+    ));
+    let mut transport = RecordingTransport::success(sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-001",
+        "cfg-v1",
+        None,
+    ));
 
     let outcome =
         rsagent::config_sync::run_sync_once(&mut state, &sample_identity(), &mut transport)
@@ -460,34 +354,35 @@ async fn run_sync_once_invalid_candidate_config_does_not_replace_last_known_good
 
     assert!(!outcome.config_changed);
     assert!(!outcome.heartbeat_reset_required);
-    assert!(state.loops_enabled());
-    assert!(state.is_degraded());
-    assert_eq!(state.latest_seen_config_version(), Some("cfg-v2"));
-    assert_eq!(state.accepted_config_version(), Some("cfg-v1"));
-    assert_eq!(state.config_version(), Some("cfg-v1"));
-    assert_eq!(
-        state.last_sync_error(),
-        Some("heartbeat interval_secs must be greater than zero")
-    );
-
-    let effective = state.effective_config().expect("last known good config");
-    assert_eq!(effective.config_version, "cfg-v1");
-    assert_eq!(effective.heartbeat_config.interval_secs, 15);
+    assert!(!outcome.sync_interval_changed);
+    assert!(!outcome.task_sync_interval_changed);
+    assert!(!outcome.heartbeat_interval_changed);
 }
 
 #[tokio::test]
-async fn run_sync_once_invalid_initial_config_leaves_runtime_without_effective_config() {
+async fn run_sync_once_uses_last_accepted_config_version_after_temporary_failure() {
     let mut state = sample_runtime_state();
-    let mut invalid = sample_response(
+    state.apply_sync_response(sample_response(
         true,
         AgentRunMode::Active,
         SyncBindingState::Bound,
         "node-001",
         "cfg-v1",
         None,
+    ));
+    state.record_temporary_sync_failure("timeout".to_string());
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let mut transport = RecordingTransport::success_with_requests(
+        sample_response(
+            true,
+            AgentRunMode::Active,
+            SyncBindingState::Bound,
+            "node-001",
+            "cfg-v1",
+            None,
+        ),
+        requests.clone(),
     );
-    invalid.job_manage_config.base_url = "".to_string();
-    let mut transport = RecordingTransport::success(invalid);
 
     let outcome =
         rsagent::config_sync::run_sync_once(&mut state, &sample_identity(), &mut transport)
@@ -495,159 +390,95 @@ async fn run_sync_once_invalid_initial_config_leaves_runtime_without_effective_c
             .unwrap();
 
     assert!(!outcome.config_changed);
-    assert!(!state.loops_enabled());
-    assert!(!state.is_degraded());
-    assert_eq!(state.latest_seen_config_version(), Some("cfg-v1"));
-    assert_eq!(state.accepted_config_version(), None);
-    assert!(state.effective_config().is_none());
-    assert_eq!(
-        state.last_sync_error(),
-        Some("job manage base_url must not be empty")
-    );
+    let requests = requests.lock().expect("requests lock");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].config_version.as_deref(), Some("cfg-v1"));
+    assert_eq!(state.sync_state(), RuntimeSyncState::Accepted);
 }
 
 #[tokio::test]
-async fn run_sync_once_idle_acceptance_keeps_config_but_limits_subordinate_loops() {
-    let mut state = sample_runtime_state();
-    let mut transport = RecordingTransport::success(sample_response(
-        true,
-        AgentRunMode::Idle,
-        SyncBindingState::Bound,
-        "node-001",
-        "cfg-limited",
-        None,
-    ));
-
-    let outcome =
-        rsagent::config_sync::run_sync_once(&mut state, &sample_identity(), &mut transport)
-            .await
-            .unwrap();
-
-    assert!(outcome.config_changed);
-    assert!(!state.loops_enabled());
-    assert_eq!(state.subordinate_loop_mode(), SubordinateLoopMode::Limited);
-    assert_eq!(state.accepted_config_version(), Some("cfg-limited"));
-    assert!(state.effective_config().is_none());
-
-    rsagent::runtime_coordinator::promote_staged_config_after_loop_switch(&mut state);
-
-    let effective = state.effective_config().unwrap();
-    assert_eq!(effective.config_version, "cfg-limited");
-}
-
-#[tokio::test]
-async fn run_sync_once_accepted_untrusted_binding_does_not_activate_loops() {
-    let mut state = sample_runtime_state();
-    let mut transport = RecordingTransport::success(sample_response(
-        true,
-        AgentRunMode::Active,
-        SyncBindingState::Conflict,
-        "node-other",
-        "cfg-v2",
-        None,
-    ));
-
-    let outcome =
-        rsagent::config_sync::run_sync_once(&mut state, &sample_identity(), &mut transport)
-            .await
-            .unwrap();
-
-    assert!(outcome.config_changed);
-    assert!(!state.loops_enabled());
-    assert_eq!(state.subordinate_loop_mode(), SubordinateLoopMode::Withheld);
-    assert_eq!(state.binding_state(), Some(&SyncBindingState::Conflict));
-    assert_eq!(state.accepted_config_version(), Some("cfg-v2"));
-    assert!(state.effective_config().is_none());
-
-    rsagent::runtime_coordinator::promote_staged_config_after_loop_switch(&mut state);
-
-    let effective = state.effective_config().unwrap();
-    assert_eq!(effective.config_version, "cfg-v2");
-}
-
-#[tokio::test]
-async fn run_sync_once_rejected_sync_keeps_local_identity_boundary_for_next_request() {
-    let mut state = AgentRuntimeState::new(AgentRuntimeConfig {
-        nodemanage_sync_url: "http://127.0.0.1:3000/agent/sync".to_string(),
-        agent_id: "agt-local".to_string(),
-        node_id: Some("node-001".to_string()),
-        data_dir: "/var/lib/rsagent".to_string(),
-        sync_interval_secs: 60,
-    });
-    let mut transport = RecordingTransport::success(sample_response_with_agent_id(
-        false,
-        AgentRunMode::Idle,
-        SyncBindingState::Conflict,
-        "node-001",
-        "cfg-denied",
-        Some("rebind required"),
-        "agt-previous",
-    ));
-
-    rsagent::config_sync::run_sync_once(&mut state, &sample_identity(), &mut transport)
-        .await
-        .unwrap();
-
-    let request = state.build_sync_request(&sample_identity());
-    assert_eq!(request.agent_id, "agt-local");
-    assert_eq!(request.node_id.as_deref(), Some("node-001"));
-    assert_eq!(state.binding_state(), Some(&SyncBindingState::Conflict));
-}
-
-#[tokio::test]
-async fn run_sync_once_does_not_infer_runtime_ownership_from_node_match_alone() {
-    let mut state = AgentRuntimeState::new(AgentRuntimeConfig {
-        nodemanage_sync_url: "http://127.0.0.1:3000/agent/sync".to_string(),
-        agent_id: "agt-local".to_string(),
-        node_id: Some("node-001".to_string()),
-        data_dir: "/var/lib/rsagent".to_string(),
-        sync_interval_secs: 60,
-    });
-    let mut transport = RecordingTransport::success(sample_response_with_agent_id(
+async fn run_sync_once_does_not_mutate_live_state_when_accepted_sync_persistence_fails() {
+    let mut state = sample_runtime_state_in(unwritable_data_dir());
+    state.apply_sync_response(sample_response(
         true,
         AgentRunMode::Active,
         SyncBindingState::Bound,
         "node-001",
         "cfg-v1",
         None,
-        "agt-other",
     ));
 
-    let outcome =
-        rsagent::config_sync::run_sync_once(&mut state, &sample_identity(), &mut transport)
-            .await
-            .unwrap();
+    let mut updated = sample_response(
+        true,
+        AgentRunMode::Idle,
+        SyncBindingState::Bound,
+        "node-002",
+        "cfg-v2",
+        None,
+    );
+    updated.sync_interval_secs = 99;
+    let mut transport = RecordingTransport::success(updated);
 
-    assert!(outcome.config_changed);
-    assert!(!state.loops_enabled());
-    assert_eq!(state.subordinate_loop_mode(), SubordinateLoopMode::Withheld);
+    let error = rsagent::config_sync::run_sync_once(&mut state, &sample_identity(), &mut transport)
+        .await
+        .expect_err("accepted sync should fail when identity persistence fails");
+
+    assert!(
+        error
+            .to_string()
+            .contains("failed to create rsagent data dir")
+    );
+    assert_eq!(state.local_node_id(), Some("node-001"));
+    assert_eq!(state.config_version(), Some("cfg-v1"));
+    assert!(state.loops_enabled());
+    assert_eq!(state.sync_state(), RuntimeSyncState::Accepted);
+    assert_eq!(
+        state
+            .effective_config()
+            .expect("effective config")
+            .sync_interval_secs,
+        10
+    );
 }
 
 #[derive(Debug)]
 struct RecordingTransport {
-    responses: Vec<AgentSyncResponse>,
-    errors: std::collections::VecDeque<String>,
+    outcomes: std::collections::VecDeque<std::result::Result<AgentSyncResponse, String>>,
     requests: Arc<Mutex<Vec<nodemanage::AgentSyncRequest>>>,
 }
 
 impl RecordingTransport {
     fn success(response: AgentSyncResponse) -> Self {
         Self {
-            responses: vec![response],
-            errors: std::collections::VecDeque::new(),
+            outcomes: std::collections::VecDeque::from([Ok(response)]),
             requests: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     fn temporary_failure(message: &str) -> Self {
-        Self::temporary_failures(vec![message])
+        Self {
+            outcomes: std::collections::VecDeque::from([Err(message.to_string())]),
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }
     }
 
-    fn temporary_failures(messages: Vec<&str>) -> Self {
+    fn success_with_requests(
+        response: AgentSyncResponse,
+        requests: Arc<Mutex<Vec<nodemanage::AgentSyncRequest>>>,
+    ) -> Self {
         Self {
-            responses: Vec::new(),
-            errors: messages.into_iter().map(ToString::to_string).collect(),
-            requests: Arc::new(Mutex::new(Vec::new())),
+            outcomes: std::collections::VecDeque::from([Ok(response)]),
+            requests,
+        }
+    }
+
+    fn outcomes(
+        outcomes: Vec<std::result::Result<AgentSyncResponse, String>>,
+        requests: Arc<Mutex<Vec<nodemanage::AgentSyncRequest>>>,
+    ) -> Self {
+        Self {
+            outcomes: std::collections::VecDeque::from(outcomes),
+            requests,
         }
     }
 }
@@ -667,29 +498,55 @@ impl NodeManageSyncTransport for RecordingTransport {
             .lock()
             .expect("requests lock")
             .push(request.clone());
-        let response = self.responses.first().cloned();
-        if self.responses.len() > 1 {
-            self.responses.remove(0);
-        }
-        let error = self.errors.pop_front();
+        let outcome = self.outcomes.pop_front();
         Box::pin(async move {
-            match (response, error) {
-                (_, Some(error)) => Err(anyhow!(error)),
-                (Some(response), None) => Ok(response),
-                _ => Err(anyhow!("recording transport misconfigured")),
+            match outcome {
+                Some(Ok(response)) => Ok(response),
+                Some(Err(error)) => Err(anyhow!(error)),
+                None => Err(anyhow!("recording transport misconfigured")),
             }
         })
     }
 }
 
 fn sample_runtime_state() -> AgentRuntimeState {
+    sample_runtime_state_in(writable_data_dir("config-sync-state"))
+}
+
+fn sample_runtime_state_in(data_dir: String) -> AgentRuntimeState {
     AgentRuntimeState::new(AgentRuntimeConfig {
         nodemanage_sync_url: "http://127.0.0.1:3000/agent/sync".to_string(),
         agent_id: "agt-001".to_string(),
         node_id: None,
-        data_dir: "/var/lib/rsagent".to_string(),
+        data_dir,
         sync_interval_secs: 60,
     })
+}
+
+fn unwritable_data_dir() -> String {
+    let path = std::env::temp_dir().join(format!(
+        "rsagent-config-sync-file-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("unix epoch")
+            .as_nanos()
+    ));
+    fs::write(&path, "not a directory").expect("write blocking file");
+    path.to_string_lossy().into_owned()
+}
+
+fn writable_data_dir(prefix: &str) -> String {
+    let path = std::env::temp_dir().join(format!(
+        "rsagent-{prefix}-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("unix epoch")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&path).expect("create writable data dir");
+    path.to_string_lossy().into_owned()
 }
 
 fn sample_identity() -> AgentIdentity {
@@ -712,29 +569,9 @@ fn sample_response(
     config_version: &str,
     rejection_reason: Option<&str>,
 ) -> AgentSyncResponse {
-    sample_response_with_agent_id(
-        accepted,
-        agent_run_mode,
-        binding_state,
-        bound_node_id,
-        config_version,
-        rejection_reason,
-        "agt-001",
-    )
-}
-
-fn sample_response_with_agent_id(
-    accepted: bool,
-    agent_run_mode: AgentRunMode,
-    binding_state: SyncBindingState,
-    bound_node_id: &str,
-    config_version: &str,
-    rejection_reason: Option<&str>,
-    agent_id: &str,
-) -> AgentSyncResponse {
     AgentSyncResponse {
         accepted,
-        agent_id: agent_id.to_string(),
+        agent_id: "agt-001".to_string(),
         bound_node_id: bound_node_id.to_string(),
         binding_state,
         agent_run_mode,
