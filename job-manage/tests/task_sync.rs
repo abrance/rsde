@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use job_manage::{
     JobManageError, TaskApplyIdentity, TaskApplyPatch, TaskApplyRequest, TaskDesiredState,
     TaskListQuery, TaskObservedState, TaskResource, TaskServerOwnedField, TaskServiceError,
-    TaskSyncService, TaskType,
+    TaskSyncService, TaskType, models::TaskFinalResultCategory,
 };
 
 fn sample_task_resource(observed_state: TaskObservedState) -> TaskResource {
@@ -74,6 +74,52 @@ fn task_resource_exposes_first_phase_shape() {
     assert_eq!(task.error_message, None);
     assert_eq!(task.claimed_at, None);
     assert_eq!(task.updated_at.as_deref(), Some("2026-05-31T00:00:00Z"));
+    assert_eq!(task.final_result_category(), None);
+}
+
+#[test]
+fn final_result_category_distinguishes_minimum_phase_two_categories() {
+    let mut succeeded = sample_task_resource(TaskObservedState::Succeeded);
+    succeeded.exit_code = Some(0);
+
+    let mut failed_non_zero_exit = sample_task_resource(TaskObservedState::Failed);
+    failed_non_zero_exit.exit_code = Some(17);
+    failed_non_zero_exit.stderr = Some("boom".to_string());
+
+    let mut failed_invalid_payload = sample_task_resource(TaskObservedState::Failed);
+    failed_invalid_payload.error_message = Some(
+        TaskFinalResultCategory::FailedInvalidPayload
+            .annotate_error_message("script task missing script_content"),
+    );
+
+    let mut failed_executor_start = sample_task_resource(TaskObservedState::Failed);
+    failed_executor_start.error_message = Some(
+        TaskFinalResultCategory::FailedExecutorStart
+            .annotate_error_message("failed to spawn task task-1"),
+    );
+
+    let timeout = sample_task_resource(TaskObservedState::Timeout);
+
+    assert_eq!(
+        succeeded.final_result_category(),
+        Some(TaskFinalResultCategory::Succeeded)
+    );
+    assert_eq!(
+        failed_non_zero_exit.final_result_category(),
+        Some(TaskFinalResultCategory::FailedNonZeroExit)
+    );
+    assert_eq!(
+        failed_invalid_payload.final_result_category(),
+        Some(TaskFinalResultCategory::FailedInvalidPayload)
+    );
+    assert_eq!(
+        failed_executor_start.final_result_category(),
+        Some(TaskFinalResultCategory::FailedExecutorStart)
+    );
+    assert_eq!(
+        timeout.final_result_category(),
+        Some(TaskFinalResultCategory::Timeout)
+    );
 }
 
 #[test]
@@ -142,6 +188,24 @@ fn terminal_states_cannot_regress_to_non_terminal_states() {
             }
         );
         assert_eq!(task.observed_state, terminal_state);
+    }
+}
+
+#[test]
+fn same_observed_state_transition_is_idempotent() {
+    for state in [
+        TaskObservedState::Queued,
+        TaskObservedState::Acknowledged,
+        TaskObservedState::Running,
+        TaskObservedState::Succeeded,
+        TaskObservedState::Failed,
+        TaskObservedState::Timeout,
+    ] {
+        let mut task = sample_task_resource(state);
+
+        task.transition_observed_state(state).unwrap();
+
+        assert_eq!(task.observed_state, state);
     }
 }
 
@@ -270,6 +334,210 @@ async fn repeated_apply_with_same_payload_is_idempotent() {
 }
 
 #[tokio::test]
+async fn repeated_apply_with_same_terminal_payload_is_idempotent() {
+    let mut task = sample_task(
+        "task-terminal-idempotent",
+        "agent-1",
+        "node-1",
+        TaskObservedState::Succeeded,
+        Some("2026-05-31T00:02:00Z"),
+    );
+    task.stdout = Some("done".to_string());
+    task.finished_at = Some("2026-05-31T00:02:00Z".to_string());
+    task.exit_code = Some(0);
+
+    let service = TaskSyncService::new(vec![task]);
+    let identity = TaskApplyIdentity {
+        task_id: "task-terminal-idempotent".to_string(),
+        agent_id: "agent-1".to_string(),
+        node_id: "node-1".to_string(),
+    };
+    let request = TaskApplyRequest {
+        patch: TaskApplyPatch {
+            observed_state: Some(TaskObservedState::Succeeded),
+            stdout: Some("done".to_string()),
+            finished_at: Some("2026-05-31T00:02:00Z".to_string()),
+            exit_code: Some(0),
+            updated_at: Some("2026-05-31T00:02:00Z".to_string()),
+            ..Default::default()
+        },
+        rejected_fields: vec![],
+    };
+
+    let first = service
+        .apply_task(&identity, request.clone())
+        .await
+        .unwrap();
+    let second = service.apply_task(&identity, request).await.unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(second.observed_state, TaskObservedState::Succeeded);
+    assert_eq!(
+        second.final_result_category(),
+        Some(TaskFinalResultCategory::Succeeded)
+    );
+}
+
+#[tokio::test]
+async fn apply_preserves_failed_invalid_payload_category_in_task_result() {
+    let service = TaskSyncService::new(vec![sample_task(
+        "task-invalid-payload",
+        "agent-1",
+        "node-1",
+        TaskObservedState::Acknowledged,
+        Some("2026-05-31T00:00:00Z"),
+    )]);
+
+    let updated = service
+        .apply_task(
+            &TaskApplyIdentity {
+                task_id: "task-invalid-payload".to_string(),
+                agent_id: "agent-1".to_string(),
+                node_id: "node-1".to_string(),
+            },
+            TaskApplyRequest {
+                patch: TaskApplyPatch {
+                    observed_state: Some(TaskObservedState::Failed),
+                    error_message: Some(
+                        TaskFinalResultCategory::FailedInvalidPayload
+                            .annotate_error_message("script task cannot include command_line"),
+                    ),
+                    finished_at: Some("2026-05-31T00:03:00Z".to_string()),
+                    updated_at: Some("2026-05-31T00:03:00Z".to_string()),
+                    ..Default::default()
+                },
+                rejected_fields: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(updated.observed_state, TaskObservedState::Failed);
+    assert_eq!(
+        updated.final_result_category(),
+        Some(TaskFinalResultCategory::FailedInvalidPayload)
+    );
+}
+
+#[tokio::test]
+async fn apply_preserves_failed_executor_start_category_in_task_result() {
+    let service = TaskSyncService::new(vec![sample_task(
+        "task-start-failure",
+        "agent-1",
+        "node-1",
+        TaskObservedState::Running,
+        Some("2026-05-31T00:00:00Z"),
+    )]);
+
+    let updated = service
+        .apply_task(
+            &TaskApplyIdentity {
+                task_id: "task-start-failure".to_string(),
+                agent_id: "agent-1".to_string(),
+                node_id: "node-1".to_string(),
+            },
+            TaskApplyRequest {
+                patch: TaskApplyPatch {
+                    observed_state: Some(TaskObservedState::Failed),
+                    error_message: Some(
+                        TaskFinalResultCategory::FailedExecutorStart
+                            .annotate_error_message("failed to spawn task task-start-failure"),
+                    ),
+                    finished_at: Some("2026-05-31T00:04:00Z".to_string()),
+                    updated_at: Some("2026-05-31T00:04:00Z".to_string()),
+                    ..Default::default()
+                },
+                rejected_fields: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(updated.observed_state, TaskObservedState::Failed);
+    assert_eq!(
+        updated.final_result_category(),
+        Some(TaskFinalResultCategory::FailedExecutorStart)
+    );
+}
+
+#[tokio::test]
+async fn apply_rejects_uncategorized_failed_terminal_result_payload() {
+    let service = TaskSyncService::new(vec![sample_task(
+        "task-uncategorized-failed",
+        "agent-1",
+        "node-1",
+        TaskObservedState::Running,
+        Some("2026-05-31T00:00:00Z"),
+    )]);
+
+    let err = service
+        .apply_task(
+            &TaskApplyIdentity {
+                task_id: "task-uncategorized-failed".to_string(),
+                agent_id: "agent-1".to_string(),
+                node_id: "node-1".to_string(),
+            },
+            TaskApplyRequest {
+                patch: TaskApplyPatch {
+                    observed_state: Some(TaskObservedState::Failed),
+                    error_message: Some("plain failed text without category".to_string()),
+                    finished_at: Some("2026-05-31T00:04:30Z".to_string()),
+                    updated_at: Some("2026-05-31T00:04:30Z".to_string()),
+                    ..Default::default()
+                },
+                rejected_fields: vec![],
+            },
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        err,
+        TaskServiceError::TaskModel(JobManageError::InvalidTaskObservedStateTransition {
+            from: TaskObservedState::Failed,
+            to: TaskObservedState::Failed,
+        })
+    );
+}
+
+#[tokio::test]
+async fn apply_preserves_timeout_category_in_task_result() {
+    let service = TaskSyncService::new(vec![sample_task(
+        "task-timeout",
+        "agent-1",
+        "node-1",
+        TaskObservedState::Running,
+        Some("2026-05-31T00:00:00Z"),
+    )]);
+
+    let updated = service
+        .apply_task(
+            &TaskApplyIdentity {
+                task_id: "task-timeout".to_string(),
+                agent_id: "agent-1".to_string(),
+                node_id: "node-1".to_string(),
+            },
+            TaskApplyRequest {
+                patch: TaskApplyPatch {
+                    observed_state: Some(TaskObservedState::Timeout),
+                    finished_at: Some("2026-05-31T00:05:00Z".to_string()),
+                    updated_at: Some("2026-05-31T00:05:00Z".to_string()),
+                    ..Default::default()
+                },
+                rejected_fields: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(updated.observed_state, TaskObservedState::Timeout);
+    assert_eq!(
+        updated.final_result_category(),
+        Some(TaskFinalResultCategory::Timeout)
+    );
+}
+
+#[tokio::test]
 async fn apply_rejects_server_owned_fields() {
     let service = TaskSyncService::new(vec![sample_task(
         "task-server-owned",
@@ -390,5 +658,95 @@ async fn apply_distinguishes_not_found_and_ownership_mismatch() {
             agent_id: "agent-2".to_string(),
             node_id: "node-1".to_string(),
         }
+    );
+
+    let node_mismatch = service
+        .apply_task(
+            &TaskApplyIdentity {
+                task_id: "task-owned".to_string(),
+                agent_id: "agent-1".to_string(),
+                node_id: "node-2".to_string(),
+            },
+            TaskApplyRequest::default(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        node_mismatch,
+        TaskServiceError::TaskOwnershipMismatch {
+            task_id: "task-owned".to_string(),
+            agent_id: "agent-1".to_string(),
+            node_id: "node-2".to_string(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn apply_accepts_running_only_after_acknowledged() {
+    let service = TaskSyncService::new(vec![sample_task(
+        "task-running-flow",
+        "agent-1",
+        "node-1",
+        TaskObservedState::Acknowledged,
+        Some("2026-05-31T00:00:00Z"),
+    )]);
+
+    let updated = service
+        .apply_task(
+            &TaskApplyIdentity {
+                task_id: "task-running-flow".to_string(),
+                agent_id: "agent-1".to_string(),
+                node_id: "node-1".to_string(),
+            },
+            TaskApplyRequest {
+                patch: TaskApplyPatch {
+                    observed_state: Some(TaskObservedState::Running),
+                    started_at: Some("2026-05-31T00:01:00Z".to_string()),
+                    updated_at: Some("2026-05-31T00:01:00Z".to_string()),
+                    ..Default::default()
+                },
+                rejected_fields: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(updated.observed_state, TaskObservedState::Running);
+    assert_eq!(updated.started_at.as_deref(), Some("2026-05-31T00:01:00Z"));
+
+    let queued_service = TaskSyncService::new(vec![sample_task(
+        "task-running-illegal",
+        "agent-1",
+        "node-1",
+        TaskObservedState::Queued,
+        Some("2026-05-31T00:00:00Z"),
+    )]);
+
+    let err = queued_service
+        .apply_task(
+            &TaskApplyIdentity {
+                task_id: "task-running-illegal".to_string(),
+                agent_id: "agent-1".to_string(),
+                node_id: "node-1".to_string(),
+            },
+            TaskApplyRequest {
+                patch: TaskApplyPatch {
+                    observed_state: Some(TaskObservedState::Running),
+                    started_at: Some("2026-05-31T00:01:00Z".to_string()),
+                    updated_at: Some("2026-05-31T00:01:00Z".to_string()),
+                    ..Default::default()
+                },
+                rejected_fields: vec![],
+            },
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        err,
+        TaskServiceError::TaskModel(JobManageError::InvalidTaskObservedStateTransition {
+            from: TaskObservedState::Queued,
+            to: TaskObservedState::Running,
+        })
     );
 }

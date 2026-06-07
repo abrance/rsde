@@ -241,5 +241,18 @@ fn apply_task_patch(task: &mut TaskResource, patch: &TaskApplyPatch) -> Result<(
         task.updated_at = Some(updated_at.clone());
     }
 
+    validate_terminal_result_category(task)?;
+
+    Ok(())
+}
+
+fn validate_terminal_result_category(task: &TaskResource) -> Result<()> {
+    if task.observed_state == TaskObservedState::Failed && task.final_result_category().is_none() {
+        return Err(JobManageError::InvalidTaskObservedStateTransition {
+            from: TaskObservedState::Failed,
+            to: TaskObservedState::Failed,
+        });
+    }
+
     Ok(())
 }
