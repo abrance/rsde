@@ -1,5 +1,17 @@
 use crate::{config_sync::SyncOutcome, registration::AgentRuntimeState};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureClass {
+    TemporaryUpstream,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetryBackoffPolicy {
+    pub failure_class: FailureClass,
+    pub consecutive_failures: usize,
+    pub backoff_level: u8,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubordinateLoopDecision {
     pub run_heartbeat: bool,
@@ -13,6 +25,7 @@ pub struct RuntimeCoordinatorEffects {
     pub rebuild_sync_interval: bool,
     pub rebuild_task_sync_interval: bool,
     pub rebuild_heartbeat_interval: bool,
+    pub retry_policy: Option<RetryBackoffPolicy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,13 +44,39 @@ pub fn evaluate_subordinate_loops(state: &AgentRuntimeState) -> SubordinateLoopD
     }
 }
 
+pub fn promote_staged_config_after_loop_switch(state: &mut AgentRuntimeState) {
+    state.promote_staged_config_to_effective();
+}
+
 pub fn effects_from_sync_outcome(outcome: &SyncOutcome) -> RuntimeCoordinatorEffects {
     RuntimeCoordinatorEffects {
         reset_heartbeat: outcome.heartbeat_reset_required,
         rebuild_sync_interval: outcome.sync_interval_changed,
         rebuild_task_sync_interval: outcome.task_sync_interval_changed,
         rebuild_heartbeat_interval: outcome.heartbeat_interval_changed,
+        retry_policy: outcome.retry_policy.clone(),
     }
+}
+
+pub fn temporary_upstream_retry_policy(consecutive_failures: usize) -> RetryBackoffPolicy {
+    let consecutive_failures = consecutive_failures.max(1);
+
+    RetryBackoffPolicy {
+        failure_class: FailureClass::TemporaryUpstream,
+        consecutive_failures,
+        backoff_level: consecutive_failures.saturating_sub(1).min(3) as u8,
+    }
+}
+
+pub fn next_temporary_upstream_retry_policy(
+    previous: Option<&RetryBackoffPolicy>,
+) -> RetryBackoffPolicy {
+    let next_count = previous
+        .filter(|policy| policy.failure_class == FailureClass::TemporaryUpstream)
+        .map(|policy| policy.consecutive_failures.saturating_add(1))
+        .unwrap_or(1);
+
+    temporary_upstream_retry_policy(next_count)
 }
 
 pub fn loop_intervals(state: &AgentRuntimeState, default_sync_interval_secs: u64) -> LoopIntervals {
