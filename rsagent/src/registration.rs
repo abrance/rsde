@@ -313,7 +313,8 @@ impl AgentRuntimeState {
     ) {
         self.latest_seen_config_version = Some(response.config_version.clone());
         self.binding_state = Some(response.binding_state.clone());
-        self.local_node_id = (!response.bound_node_id.is_empty()).then(|| response.bound_node_id.clone());
+        self.local_node_id =
+            (!response.bound_node_id.is_empty()).then(|| response.bound_node_id.clone());
         self.base_config.node_id = self.local_node_id.clone();
         self.accepted_config_version = Some(response.config_version.clone());
         self.ownership_confirmed = response.binding_state == SyncBindingState::Bound
@@ -343,7 +344,8 @@ impl AgentRuntimeState {
             return;
         }
 
-        self.local_node_id = (!response.bound_node_id.is_empty()).then(|| response.bound_node_id.clone());
+        self.local_node_id =
+            (!response.bound_node_id.is_empty()).then(|| response.bound_node_id.clone());
         self.base_config.node_id = self.local_node_id.clone();
         self.ownership_confirmed = false;
         self.subordinate_loop_mode = SubordinateLoopMode::Withheld;

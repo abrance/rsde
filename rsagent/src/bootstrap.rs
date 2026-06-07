@@ -8,7 +8,10 @@ use crate::{
     config::AgentRuntimeConfig,
     config_sync::{SyncOutcome, run_sync_once},
     registration::{AgentIdentity, AgentRuntimeState, DurableRuntimeSnapshot},
-    runtime_coordinator::{RuntimeCoordinatorEffects, effects_from_sync_outcome, promote_staged_config_after_loop_switch},
+    runtime_coordinator::{
+        RuntimeCoordinatorEffects, effects_from_sync_outcome,
+        promote_staged_config_after_loop_switch,
+    },
 };
 
 const DURABLE_RUNTIME_STATE_FILE: &str = "runtime-state.json";
@@ -30,7 +33,8 @@ pub async fn bootstrap_runtime_state<T>(
 where
     T: NodeManageSyncTransport,
 {
-    let mut state = load_durable_runtime_state(&config)?.unwrap_or_else(|| AgentRuntimeState::new(config.clone()));
+    let mut state = load_durable_runtime_state(&config)?
+        .unwrap_or_else(|| AgentRuntimeState::new(config.clone()));
     let outcome = run_sync_once(&mut state, &identity, transport).await?;
     let _ = converge_runtime_mainline_after_sync(&mut state, &outcome);
     persist_durable_runtime_state(&state)?;
@@ -63,7 +67,9 @@ pub fn persist_durable_runtime_state(state: &AgentRuntimeState) -> Result<()> {
     Ok(())
 }
 
-pub fn load_durable_runtime_state(config: &AgentRuntimeConfig) -> Result<Option<AgentRuntimeState>> {
+pub fn load_durable_runtime_state(
+    config: &AgentRuntimeConfig,
+) -> Result<Option<AgentRuntimeState>> {
     let path = durable_runtime_state_path(&config.data_dir);
     if !path.exists() {
         return Ok(None);

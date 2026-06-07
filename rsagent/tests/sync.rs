@@ -636,9 +636,10 @@ async fn test_bootstrap_runtime_state_failed_initial_sync_keeps_inactive_runtime
     let identity = sample_identity();
     let mut transport = FailingNodeManageTransport::new("bootstrap sync unavailable");
 
-    let (state, returned_identity) = bootstrap_runtime_state(config.clone(), identity.clone(), &mut transport)
-        .await
-        .unwrap();
+    let (state, returned_identity) =
+        bootstrap_runtime_state(config.clone(), identity.clone(), &mut transport)
+            .await
+            .unwrap();
 
     assert_eq!(returned_identity, identity);
     assert!(state.process_alive());
@@ -672,9 +673,10 @@ async fn test_bootstrap_runtime_state_restart_outage_recovers_from_durable_snaps
     rsagent::bootstrap::persist_durable_runtime_state(&previous).unwrap();
 
     let mut transport = FailingNodeManageTransport::new("bootstrap sync unavailable");
-    let (state, returned_identity) = bootstrap_runtime_state(config.clone(), identity.clone(), &mut transport)
-        .await
-        .unwrap();
+    let (state, returned_identity) =
+        bootstrap_runtime_state(config.clone(), identity.clone(), &mut transport)
+            .await
+            .unwrap();
 
     assert_eq!(returned_identity, identity);
     assert_eq!(state.local_node_id(), Some("node-recovered"));
@@ -689,8 +691,14 @@ async fn test_bootstrap_runtime_state_restart_outage_recovers_from_durable_snaps
     let requests = transport.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].request.agent_id, config.agent_id);
-    assert_eq!(requests[0].request.node_id.as_deref(), Some("node-recovered"));
-    assert_eq!(requests[0].request.config_version.as_deref(), Some("cfg-recovery"));
+    assert_eq!(
+        requests[0].request.node_id.as_deref(),
+        Some("node-recovered")
+    );
+    assert_eq!(
+        requests[0].request.config_version.as_deref(),
+        Some("cfg-recovery")
+    );
 
     fs::remove_dir_all(&config.data_dir).unwrap();
 }
