@@ -135,7 +135,9 @@ fn transitioning_observed_state_preserves_desired_state() {
 
 #[test]
 fn observed_state_only_allows_first_phase_legal_transitions() {
+    assert!(TaskObservedState::Queued.can_transition_to(TaskObservedState::Dispatched));
     assert!(TaskObservedState::Queued.can_transition_to(TaskObservedState::Acknowledged));
+    assert!(TaskObservedState::Dispatched.can_transition_to(TaskObservedState::Acknowledged));
     assert!(TaskObservedState::Acknowledged.can_transition_to(TaskObservedState::Running));
     assert!(TaskObservedState::Acknowledged.can_transition_to(TaskObservedState::Succeeded));
     assert!(TaskObservedState::Acknowledged.can_transition_to(TaskObservedState::Failed));
@@ -146,6 +148,7 @@ fn observed_state_only_allows_first_phase_legal_transitions() {
 
     assert!(!TaskObservedState::Queued.can_transition_to(TaskObservedState::Running));
     assert!(!TaskObservedState::Queued.can_transition_to(TaskObservedState::Succeeded));
+    assert!(!TaskObservedState::Dispatched.can_transition_to(TaskObservedState::Running));
     assert!(!TaskObservedState::Running.can_transition_to(TaskObservedState::Acknowledged));
 }
 
