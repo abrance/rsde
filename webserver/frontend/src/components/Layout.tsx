@@ -1,4 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
+import { nodeManageMeta } from '../data/nodeManageMetaData'
 import './Layout.css'
 
 interface LayoutProps {
@@ -62,6 +63,12 @@ export default function Layout({ children }: LayoutProps) {
                                 className={`nav-link ${isActive('/object-storage') ? 'active' : ''}`}
                             >
                                 对象存储
+                            </Link>
+                            <Link
+                                to={nodeManageMeta.path}
+                                className={`nav-link ${isActive(nodeManageMeta.path) ? 'active' : ''}`}
+                            >
+                                {nodeManageMeta.name}
                             </Link>
                             <Link
                                 to="/job-manage"

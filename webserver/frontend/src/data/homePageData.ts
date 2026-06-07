@@ -1,4 +1,5 @@
 import { rcToolData } from "./rcToolsData"
+import { nodeManageMeta } from "./nodeManageMetaData"
 
 export interface ToolCardData {
     name: string
@@ -48,6 +49,17 @@ export const toolsData: ToolCardData[] = [
             '多语言支持',
             '坐标信息提取',
             '批量处理',
+        ],
+    },
+    {
+        name: nodeManageMeta.name,
+        path: nodeManageMeta.path,
+        icon: nodeManageMeta.icon,
+        description: nodeManageMeta.description,
+        features: [
+            '节点纳管与注册',
+            '在线状态监控',
+            '环境初始化',
         ],
     },
     {
