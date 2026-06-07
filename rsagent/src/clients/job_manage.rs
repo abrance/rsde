@@ -210,12 +210,6 @@ where
         .text()
         .with_context(|| format!("failed to read job-manage response body from {endpoint}"))?;
 
-    if !status.is_success() {
-        return Err(anyhow!(
-            "job-manage request to {endpoint} failed with status {status}: {body}"
-        ));
-    }
-
     let value: serde_json::Value = serde_json::from_str(&body)
         .with_context(|| format!("invalid JSON response from {endpoint}"))?;
 
@@ -228,6 +222,12 @@ where
             .unwrap_or("unknown job-manage error");
         return Err(anyhow!(
             "job-manage request to {endpoint} returned error: {error}"
+        ));
+    }
+
+    if !status.is_success() {
+        return Err(anyhow!(
+            "job-manage request to {endpoint} failed with status {status}: {body}"
         ));
     }
 
