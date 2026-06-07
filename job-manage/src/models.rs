@@ -73,6 +73,7 @@ impl TaskFinalResultCategory {
             }
             TaskObservedState::Failed
             | TaskObservedState::Queued
+            | TaskObservedState::Dispatched
             | TaskObservedState::Acknowledged
             | TaskObservedState::Running => None,
         }

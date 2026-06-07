@@ -1,6 +1,6 @@
 use std::{env, fs, time::Duration};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use rsagent::{
     bootstrap::{bootstrap_runtime_state, default_identity},
     clients::{
@@ -9,7 +9,7 @@ use rsagent::{
     },
     config::AgentRuntimeConfig,
     config_sync::{diagnose_sync_transition, run_sync_once},
-    heartbeat::{reconcile_after_sync, HeartbeatReporter},
+    heartbeat::{HeartbeatReporter, reconcile_after_sync},
     runtime_coordinator::{effects_from_sync_outcome, evaluate_subordinate_loops, loop_intervals},
     task_sync::TaskSyncLoop,
 };

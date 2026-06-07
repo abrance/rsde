@@ -15,13 +15,13 @@ use rsagent::{
     registration::{AgentIdentity, AgentRuntimeState, RuntimeSyncState},
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::{TimeZone, Utc};
 use nodemanage::{
     AgentRunMode, AgentSyncResponse, HeartbeatConfig, JobManageConfig, MemoryNodeRepository,
     NodeManager, NoopRsAgentInstaller, SyncBindingState, TaskFilterDefaults,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[test]
 fn test_agent_config_placeholder_exists() {
@@ -570,8 +570,8 @@ async fn test_bootstrap_runtime_state_reuses_persisted_agent_and_node_identity_a
 }
 
 #[tokio::test]
-async fn test_bootstrap_runtime_state_prefers_explicit_agent_id_but_preserves_bound_node_identity_on_conflict(
-) {
+async fn test_bootstrap_runtime_state_prefers_explicit_agent_id_but_preserves_bound_node_identity_on_conflict()
+ {
     let data_dir = test_data_dir("bootstrap-conflict-identity");
     let bootstrap_config = AgentRuntimeConfig::installer_bootstrap(
         "http://127.0.0.1:3000/agent/sync".to_string(),
