@@ -204,6 +204,7 @@ fn map_node_error(err: NodeManageError) -> JobManageError {
         | NodeManageError::RebindTargetAlreadyBound(message)
         | NodeManageError::InvalidRebindRequest(message)
         | NodeManageError::InvalidInput(message)
+        | NodeManageError::Conflict(message)
         | NodeManageError::Storage(message) => JobManageError::NodeNotFound(message),
     }
 }
