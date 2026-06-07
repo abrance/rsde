@@ -1,7 +1,7 @@
 use std::{ffi::OsStr, process::Stdio, time::Duration};
 
 use anyhow::{Context, Result};
-use job_manage::{TaskObservedState, TaskResource, TaskType};
+use job_manage::{TaskObservedState, TaskResource, TaskType, models::TaskFinalResultCategory};
 use tokio::{
     io::AsyncReadExt,
     process::{Child, ChildStderr, ChildStdout, Command},
@@ -15,6 +15,7 @@ pub struct ExecutionResult {
     pub stderr: String,
     pub exit_code: Option<i32>,
     pub state: TaskObservedState,
+    pub category: Option<TaskFinalResultCategory>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -41,6 +42,7 @@ impl LocalTaskExecutor {
             stderr,
             exit_code: completion.exit_code,
             state: completion.state,
+            category: completion.category,
         })
     }
 }
@@ -49,6 +51,7 @@ impl LocalTaskExecutor {
 struct ProcessCompletion {
     state: TaskObservedState,
     exit_code: Option<i32>,
+    category: Option<TaskFinalResultCategory>,
 }
 
 fn build_command(task: &TaskResource) -> Result<Command> {
@@ -154,14 +157,17 @@ async fn wait_for_completion(
         Some(status) if status.success() => ProcessCompletion {
             state: TaskObservedState::Succeeded,
             exit_code: status.code(),
+            category: Some(TaskFinalResultCategory::Succeeded),
         },
         Some(status) => ProcessCompletion {
             state: TaskObservedState::Failed,
             exit_code: status.code(),
+            category: Some(TaskFinalResultCategory::FailedNonZeroExit),
         },
         None => ProcessCompletion {
             state: TaskObservedState::Timeout,
             exit_code: None,
+            category: Some(TaskFinalResultCategory::Timeout),
         },
     })
 }
