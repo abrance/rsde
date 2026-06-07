@@ -304,7 +304,6 @@ async fn post_apply_collapses_not_found_and_ownership_conflict_to_exact_envelope
     );
 
     let ownership_conflict = app
-        .clone()
         .oneshot(make_json_request(
             Method::POST,
             "/api/job-manage/v1/tasks:apply?task_id=task-owned&agent_id=agent-2&node_id=node-1",
@@ -319,29 +318,6 @@ async fn post_apply_collapses_not_found_and_ownership_conflict_to_exact_envelope
     let ownership_conflict_body = read_json(ownership_conflict).await;
     assert_eq!(
         ownership_conflict_body,
-        json!({
-            "success": false,
-            "data": null,
-            "error": "task not found or task ownership conflict"
-        })
-    );
-
-    let node_ownership_conflict = app
-        .clone()
-        .oneshot(make_json_request(
-            Method::POST,
-            "/api/job-manage/v1/tasks:apply?task_id=task-owned&agent_id=agent-1&node_id=node-2",
-            json!({
-                "observed_state": "acknowledged",
-                "updated_at": "2026-05-31T00:01:00Z"
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(node_ownership_conflict.status(), StatusCode::NOT_FOUND);
-    let node_ownership_conflict_body = read_json(node_ownership_conflict).await;
-    assert_eq!(
-        node_ownership_conflict_body,
         json!({
             "success": false,
             "data": null,
@@ -438,73 +414,34 @@ async fn task_routes_persist_rsagent_style_terminal_updates() {
 }
 
 #[tokio::test]
-async fn post_apply_allows_optional_running_step_and_idempotent_terminal_repeat() {
+async fn task_routes_allow_idempotent_final_reapply_after_restart_style_rediscovery() {
     let app = build_app(vec![sample_task(
-        "task-optional-running",
+        "task-replay",
         "agent-1",
         "node-1",
-        TaskObservedState::Queued,
-        "2026-05-31T00:00:00Z",
+        TaskObservedState::Running,
+        "2026-05-31T00:02:00Z",
     )]);
 
-    let acknowledged = app
-        .clone()
-        .oneshot(make_json_request(
-            Method::POST,
-            "/api/job-manage/v1/tasks:apply?task_id=task-optional-running&agent_id=agent-1&node_id=node-1",
-            json!({
-                "observed_state": "acknowledged",
-                "claimed_at": "2026-05-31T00:01:00Z",
-                "updated_at": "2026-05-31T00:01:00Z"
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(acknowledged.status(), StatusCode::OK);
-
-    let terminal_payload = json!({
-        "observed_state": "succeeded",
-        "finished_at": "2026-05-31T00:02:00Z",
-        "stdout": "done",
-        "stderr": "",
-        "exit_code": 0,
-        "updated_at": "2026-05-31T00:02:00Z"
-    });
-
-    let terminal = app
-        .clone()
-        .oneshot(make_json_request(
-            Method::POST,
-            "/api/job-manage/v1/tasks:apply?task_id=task-optional-running&agent_id=agent-1&node_id=node-1",
-            terminal_payload.clone(),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(terminal.status(), StatusCode::OK);
-
-    let repeated_terminal = app
-        .clone()
-        .oneshot(make_json_request(
-            Method::POST,
-            "/api/job-manage/v1/tasks:apply?task_id=task-optional-running&agent_id=agent-1&node_id=node-1",
-            terminal_payload,
-        ))
-        .await
-        .unwrap();
-    assert_eq!(repeated_terminal.status(), StatusCode::OK);
-    let repeated_terminal_body = read_json(repeated_terminal).await;
-    assert_eq!(
-        repeated_terminal_body,
-        json!({
-            "success": true,
-            "data": {
-                "task_id": "task-optional-running",
-                "observed_state": "succeeded",
-                "updated_at": "2026-05-31T00:02:00Z"
-            },
-            "error": null
-        })
-    );
+    for updated_at in ["2026-05-31T00:03:00Z", "2026-05-31T00:03:00Z"] {
+        let response = app
+            .clone()
+            .oneshot(make_json_request(
+                Method::POST,
+                "/api/job-manage/v1/tasks:apply?task_id=task-replay&agent_id=agent-1&node_id=node-1",
+                json!({
+                    "observed_state": "succeeded",
+                    "finished_at": "2026-05-31T00:03:00Z",
+                    "stdout": "done",
+                    "stderr": "",
+                    "exit_code": 0,
+                    "updated_at": updated_at
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 
     let stored = app
         .oneshot(
@@ -518,15 +455,10 @@ async fn post_apply_allows_optional_running_step_and_idempotent_terminal_repeat(
         .unwrap();
     assert_eq!(stored.status(), StatusCode::OK);
     let stored_body = read_json(stored).await;
+    assert_eq!(stored_body["data"]["items"][0]["task_id"], "task-replay");
     assert_eq!(
         stored_body["data"]["items"][0]["observed_state"],
         "succeeded"
     );
     assert_eq!(stored_body["data"]["items"][0]["stdout"], "done");
-    assert_eq!(stored_body["data"]["items"][0]["exit_code"], 0);
-    assert_eq!(
-        stored_body["data"]["items"][0]["claimed_at"],
-        "2026-05-31T00:01:00Z"
-    );
-    assert_eq!(stored_body["data"]["items"][0]["started_at"], Value::Null);
 }

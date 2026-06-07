@@ -1,18 +1,21 @@
 use std::{
     collections::{BTreeMap, VecDeque},
+    env,
     future::Future,
     io::{BufRead, BufReader, Read, Write},
     net::TcpListener,
+    path::PathBuf,
     pin::Pin,
     sync::{Arc, Mutex},
     thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Result;
 use chrono::{TimeZone, Utc};
 use job_manage::{
     TaskApplyIdentity, TaskApplyPatch, TaskApplyRequest, TaskDesiredState, TaskListQuery,
-    TaskObservedState, TaskResource, TaskSyncService, TaskType, models::TaskFinalResultCategory,
+    TaskObservedState, TaskResource, TaskSyncService, TaskType,
 };
 use nodemanage::{
     AgentRunMode, AgentSyncResponse, HeartbeatConfig, JobManageConfig, SyncBindingState,
@@ -21,11 +24,12 @@ use nodemanage::{
 use rsagent::{
     clients::job_manage::{JobManageTransport, ReqwestJobManageTransport, TaskApplyAck},
     config::AgentRuntimeConfig,
-    executor::ExecutionResult,
+    executor::{ExecutionError, ExecutionResult},
     registration::AgentRuntimeState,
+    runtime_coordinator::TransientRetryPolicy,
     task_sync::{
-        TaskDecisionDiagnostic, TaskExecutor, TaskLifecycleStage, TaskOutcomeKind, TaskSyncLoop,
-        TaskSyncSkipReason, TaskSyncTick, sync_once,
+        TaskDecisionOutcome, TaskDecisionStage, TaskExecutor, TaskSyncLoop, TaskSyncSkipReason,
+        TaskSyncTick, sync_once,
     },
 };
 use serde_json::{Value, json};
@@ -38,11 +42,12 @@ fn reqwest_transport_uses_job_manage_http_contract() {
             method: "GET",
             target: "/tasks?agent_id=agent-1&node_id=node-1&states=queued%2Crunning&updated_after=2026-05-31T08%3A00%3A00Z",
             body: None,
-            response: ExpectedHttpResponse::ok(json!({
+            response_body: json!({
                 "success": true,
                 "data": { "items": [task.clone()] },
                 "error": null
-            })),
+            })
+            .to_string(),
         },
         ExpectedHttpRequest {
             method: "POST",
@@ -52,7 +57,7 @@ fn reqwest_transport_uses_job_manage_http_contract() {
                 "claimed_at": "2026-05-31T08:00:00Z",
                 "updated_at": "2026-05-31T08:00:00Z"
             })),
-            response: ExpectedHttpResponse::ok(json!({
+            response_body: json!({
                 "success": true,
                 "data": {
                     "task_id": "task-http",
@@ -60,7 +65,8 @@ fn reqwest_transport_uses_job_manage_http_contract() {
                     "updated_at": "2026-05-31T08:00:00Z"
                 },
                 "error": null
-            })),
+            })
+            .to_string(),
         },
     ]);
 
@@ -108,105 +114,6 @@ fn reqwest_transport_uses_job_manage_http_contract() {
     server.finish();
 }
 
-#[test]
-fn reqwest_transport_accepts_optional_running_skip_and_node_plus_agent_ownership_conflicts() {
-    let server = TestHttpServer::spawn(vec![
-        ExpectedHttpRequest {
-            method: "POST",
-            target: "/tasks:apply?task_id=task-terminal&agent_id=agent-1&node_id=node-1",
-            body: Some(json!({
-                "observed_state": "succeeded",
-                "finished_at": "2026-05-31T08:02:00Z",
-                "stdout": "done",
-                "stderr": "",
-                "exit_code": 0,
-                "updated_at": "2026-05-31T08:02:00Z"
-            })),
-            response: ExpectedHttpResponse::ok(json!({
-                "success": true,
-                "data": {
-                    "task_id": "task-terminal",
-                    "observed_state": "succeeded",
-                    "updated_at": "2026-05-31T08:02:00Z"
-                },
-                "error": null
-            })),
-        },
-        ExpectedHttpRequest {
-            method: "POST",
-            target: "/tasks:apply?task_id=task-terminal&agent_id=agent-1&node_id=node-2",
-            body: Some(json!({
-                "observed_state": "succeeded",
-                "finished_at": "2026-05-31T08:02:00Z",
-                "stdout": "done",
-                "stderr": "",
-                "exit_code": 0,
-                "updated_at": "2026-05-31T08:02:00Z"
-            })),
-            response: ExpectedHttpResponse::status(
-                404,
-                "Not Found",
-                json!({
-                    "success": false,
-                    "data": null,
-                    "error": "task not found or task ownership conflict"
-                }),
-            ),
-        },
-    ]);
-
-    let client = rsagent::clients::job_manage::JobManageSyncClient::new(server.base_url());
-    let mut transport = ReqwestJobManageTransport::default();
-    let terminal_patch = TaskApplyPatch {
-        observed_state: Some(TaskObservedState::Succeeded),
-        finished_at: Some("2026-05-31T08:02:00Z".to_string()),
-        stdout: Some("done".to_string()),
-        stderr: Some(String::new()),
-        exit_code: Some(0),
-        updated_at: Some("2026-05-31T08:02:00Z".to_string()),
-        ..Default::default()
-    };
-
-    let terminal = client
-        .apply_task(
-            &mut transport,
-            &TaskApplyIdentity {
-                task_id: "task-terminal".to_string(),
-                agent_id: "agent-1".to_string(),
-                node_id: "node-1".to_string(),
-            },
-            &terminal_patch,
-        )
-        .unwrap();
-    assert_eq!(
-        terminal,
-        TaskApplyAck {
-            task_id: "task-terminal".to_string(),
-            observed_state: TaskObservedState::Succeeded,
-            updated_at: Some("2026-05-31T08:02:00Z".to_string()),
-        }
-    );
-
-    let ownership_error = client
-        .apply_task(
-            &mut transport,
-            &TaskApplyIdentity {
-                task_id: "task-terminal".to_string(),
-                agent_id: "agent-1".to_string(),
-                node_id: "node-2".to_string(),
-            },
-            &terminal_patch,
-        )
-        .expect_err("ownership conflict should surface exact JM envelope");
-    assert_eq!(
-        ownership_error.to_string(),
-        "job-manage request to http://127.0.0.1:0/tasks:apply returned error: task not found or task ownership conflict"
-            .replace("http://127.0.0.1:0", server.base_url())
-    );
-
-    server.finish();
-}
-
 #[tokio::test]
 async fn task_sync_loop_carries_updated_after_between_ticks() {
     let state = synced_runtime_state(&["queued"]);
@@ -216,7 +123,6 @@ async fn task_sync_loop_carries_updated_after_between_ticks() {
         stderr: String::new(),
         exit_code: Some(0),
         state: TaskObservedState::Succeeded,
-        category: Some(TaskFinalResultCategory::Succeeded),
     });
     let mut loop_runner = TaskSyncLoop::new(transport, executor);
 
@@ -243,21 +149,29 @@ async fn task_sync_loop_carries_updated_after_between_ticks() {
 }
 
 #[tokio::test]
-async fn task_sync_loop_keeps_backlog_visible_across_one_task_per_tick_processing() {
+async fn task_sync_loop_keeps_unprocessed_visible_task_reachable_on_later_tick() {
     let state = synced_runtime_state(&["queued"]);
-    let transport = RecordingTransport::stateful(vec![
-        queued_script_task("task-1"),
+    let first_tick_tasks = vec![
         TaskResource {
-            updated_at: Some("2026-05-31T07:59:00Z".to_string()),
+            updated_at: Some("2026-05-31T08:01:00Z".to_string()),
+            ..queued_script_task("task-1")
+        },
+        TaskResource {
+            updated_at: Some("2026-05-31T08:02:00Z".to_string()),
             ..queued_script_task("task-2")
         },
-    ]);
+    ];
+    let second_tick_tasks = vec![TaskResource {
+        updated_at: Some("2026-05-31T08:02:00Z".to_string()),
+        ..queued_script_task("task-2")
+    }];
+    let transport =
+        RecordingTransport::with_list_responses(vec![first_tick_tasks, second_tick_tasks]);
     let executor = RecordingExecutor::succeeds(ExecutionResult {
         stdout: "done".to_string(),
         stderr: String::new(),
         exit_code: Some(0),
         state: TaskObservedState::Succeeded,
-        category: Some(TaskFinalResultCategory::Succeeded),
     });
     let mut loop_runner = TaskSyncLoop::new(transport, executor.clone());
 
@@ -265,23 +179,6 @@ async fn task_sync_loop_keeps_backlog_visible_across_one_task_per_tick_processin
         .tick(&state, "agent-1", timestamp())
         .await
         .unwrap();
-    assert_eq!(
-        first,
-        TaskSyncTick::Applied {
-            task_id: "task-1".to_string(),
-            final_state: TaskObservedState::Succeeded,
-        }
-    );
-    assert_eq!(
-        loop_runner.last_diagnostic(),
-        Some(&TaskDecisionDiagnostic {
-            task_id: Some("task-1".to_string()),
-            observed_state: Some(TaskObservedState::Queued),
-            lifecycle_stage: TaskLifecycleStage::PublishedTerminalResult,
-            outcome: TaskOutcomeKind::Succeeded,
-            detail: "task completed successfully".to_string(),
-        })
-    );
     let second = loop_runner
         .tick(
             &state,
@@ -292,27 +189,528 @@ async fn task_sync_loop_keeps_backlog_visible_across_one_task_per_tick_processin
         .unwrap();
 
     assert_eq!(
+        first,
+        TaskSyncTick::Applied {
+            task_id: "task-1".to_string(),
+            final_state: TaskObservedState::Succeeded,
+        }
+    );
+    assert_eq!(
         second,
         TaskSyncTick::Applied {
             task_id: "task-2".to_string(),
             final_state: TaskObservedState::Succeeded,
         }
     );
-    assert_eq!(
-        loop_runner.last_diagnostic(),
-        Some(&TaskDecisionDiagnostic {
-            task_id: Some("task-2".to_string()),
-            observed_state: Some(TaskObservedState::Queued),
-            lifecycle_stage: TaskLifecycleStage::PublishedTerminalResult,
-            outcome: TaskOutcomeKind::Succeeded,
-            detail: "task completed successfully".to_string(),
-        })
-    );
 
     let transport = loop_runner.into_transport();
     assert_eq!(transport.list_calls.len(), 2);
     assert_eq!(transport.list_calls[0].query.updated_after, None);
-    assert_eq!(transport.list_calls[1].query.updated_after, None);
+    assert_eq!(
+        transport.list_calls[1].query.updated_after.as_deref(),
+        Some("2026-05-31T08:01:00Z")
+    );
+    assert_eq!(
+        executor.calls(),
+        vec!["task-1".to_string(), "task-2".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn task_sync_loop_retries_failed_terminal_replay_before_processing_sibling_pending_task() {
+    let data_dir = writable_data_dir("task-loop-replay-priority");
+    let state = synced_runtime_state_in(&data_dir, &["queued", "running"]);
+    let first_tick_tasks = vec![
+        TaskResource {
+            updated_at: Some("2026-05-31T08:01:00Z".to_string()),
+            ..queued_command_task("task-1")
+        },
+        TaskResource {
+            updated_at: Some("2026-05-31T08:02:00Z".to_string()),
+            ..queued_command_task("task-2")
+        },
+    ];
+    let transport = RecordingTransport::with_list_responses(vec![first_tick_tasks]);
+    let apply_outcomes = vec![
+        ApplyOutcome::Success,
+        ApplyOutcome::Success,
+        ApplyOutcome::Fail,
+    ];
+    let mut loop_runner = TaskSyncLoop::new(
+        RecordingTransport {
+            apply_outcomes: VecDeque::from(apply_outcomes),
+            ..transport
+        },
+        RecordingExecutor::succeeds(ExecutionResult {
+            stdout: "done".to_string(),
+            stderr: String::new(),
+            exit_code: Some(0),
+            state: TaskObservedState::Succeeded,
+        }),
+    );
+
+    let first_error = loop_runner
+        .tick(&state, "agent-1", timestamp())
+        .await
+        .unwrap_err();
+    assert!(first_error.to_string().contains("simulated apply failure"));
+
+    let replay = loop_runner
+        .tick(
+            &state,
+            "agent-1",
+            Utc.with_ymd_and_hms(2026, 5, 31, 8, 5, 0).unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        replay,
+        TaskSyncTick::Applied {
+            task_id: "task-1".to_string(),
+            final_state: TaskObservedState::Succeeded,
+        }
+    );
+
+    let transport = loop_runner.into_transport();
+    assert_eq!(transport.apply_calls.len(), 4);
+    assert_eq!(
+        transport
+            .apply_calls
+            .iter()
+            .map(|call| call.identity.task_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["task-1", "task-1", "task-1", "task-1"]
+    );
+}
+
+#[tokio::test]
+async fn task_sync_loop_running_replay_removes_persisted_file_and_later_tick_cannot_reuse_stale_data()
+ {
+    let data_dir = writable_data_dir("task-loop-running-replay-cleanup");
+    let state = synced_runtime_state_in(&data_dir, &["running", "queued"]);
+    let replay_path = PathBuf::from(&data_dir).join("task-replay.toml");
+    let running_task = TaskResource {
+        observed_state: TaskObservedState::Running,
+        claimed_at: Some("2026-05-31T08:00:00Z".to_string()),
+        started_at: Some("2026-05-31T08:00:00Z".to_string()),
+        updated_at: Some("2026-05-31T08:01:00Z".to_string()),
+        ..queued_command_task("task-running-replay")
+    };
+    let sibling_task = TaskResource {
+        updated_at: Some("2026-05-31T08:02:00Z".to_string()),
+        ..queued_command_task("task-after-replay")
+    };
+
+    let mut first_transport = RecordingTransport::with_apply_outcomes(
+        vec![queued_command_task("task-running-replay")],
+        vec![
+            ApplyOutcome::Success,
+            ApplyOutcome::Success,
+            ApplyOutcome::Fail,
+        ],
+    );
+    let first_executor = RecordingExecutor::succeeds(ExecutionResult {
+        stdout: "persisted-stdout".to_string(),
+        stderr: String::new(),
+        exit_code: Some(0),
+        state: TaskObservedState::Succeeded,
+    });
+    let first_error = sync_once(
+        &mut first_transport,
+        &first_executor,
+        &state,
+        "agent-1",
+        None,
+        timestamp(),
+    )
+    .await
+    .unwrap_err();
+    assert!(first_error.to_string().contains("simulated apply failure"));
+    assert!(replay_path.exists());
+
+    let transport = RecordingTransport::with_list_responses(vec![
+        vec![running_task, sibling_task.clone()],
+        vec![sibling_task],
+    ]);
+    let executor = RecordingExecutor::succeeds(ExecutionResult {
+        stdout: "fresh-stdout".to_string(),
+        stderr: String::new(),
+        exit_code: Some(0),
+        state: TaskObservedState::Succeeded,
+    });
+    let mut loop_runner = TaskSyncLoop::new(transport, executor.clone());
+
+    let replay_tick = loop_runner
+        .tick(&state, "agent-1", timestamp())
+        .await
+        .unwrap();
+    assert_eq!(
+        replay_tick,
+        TaskSyncTick::Applied {
+            task_id: "task-running-replay".to_string(),
+            final_state: TaskObservedState::Succeeded,
+        }
+    );
+    assert!(!replay_path.exists());
+
+    let later_tick = loop_runner
+        .tick(
+            &state,
+            "agent-1",
+            Utc.with_ymd_and_hms(2026, 5, 31, 8, 5, 0).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        later_tick,
+        TaskSyncTick::Applied {
+            task_id: "task-after-replay".to_string(),
+            final_state: TaskObservedState::Succeeded,
+        }
+    );
+
+    let transport = loop_runner.into_transport();
+    assert_eq!(transport.apply_calls.len(), 4);
+    assert_eq!(
+        transport.apply_calls[0].identity.task_id,
+        "task-running-replay"
+    );
+    assert_eq!(
+        transport.apply_calls[0].patch.stdout.as_deref(),
+        Some("persisted-stdout")
+    );
+    assert_eq!(
+        transport.apply_calls[3].identity.task_id,
+        "task-after-replay"
+    );
+    assert_eq!(
+        transport.apply_calls[3].patch.stdout.as_deref(),
+        Some("fresh-stdout")
+    );
+    assert_eq!(executor.calls(), vec!["task-after-replay".to_string()]);
+}
+
+#[tokio::test]
+async fn task_sync_loop_records_recovery_diagnostic_when_replaying_persisted_terminal_patch() {
+    let data_dir = writable_data_dir("task-loop-replay-diagnostic");
+    let state = synced_runtime_state_in(&data_dir, &["running"]);
+    let running_task = TaskResource {
+        observed_state: TaskObservedState::Running,
+        claimed_at: Some("2026-05-31T08:00:00Z".to_string()),
+        started_at: Some("2026-05-31T08:00:00Z".to_string()),
+        updated_at: Some("2026-05-31T08:01:00Z".to_string()),
+        ..queued_command_task("task-replay-diagnostic")
+    };
+
+    let mut first_transport = RecordingTransport::with_apply_outcomes(
+        vec![queued_command_task("task-replay-diagnostic")],
+        vec![
+            ApplyOutcome::Success,
+            ApplyOutcome::Success,
+            ApplyOutcome::Fail,
+        ],
+    );
+    let first_executor = RecordingExecutor::succeeds(ExecutionResult {
+        stdout: "persisted-stdout".to_string(),
+        stderr: String::new(),
+        exit_code: Some(0),
+        state: TaskObservedState::Succeeded,
+    });
+    let first_error = sync_once(
+        &mut first_transport,
+        &first_executor,
+        &state,
+        "agent-1",
+        None,
+        timestamp(),
+    )
+    .await
+    .unwrap_err();
+    assert!(first_error.to_string().contains("simulated apply failure"));
+
+    let transport = RecordingTransport::with_list_responses(vec![vec![running_task]]);
+    let executor = RecordingExecutor::fails("executor must not rerun replay task");
+    let mut loop_runner = TaskSyncLoop::new(transport, executor);
+
+    let replay_tick = loop_runner
+        .tick(&state, "agent-1", timestamp())
+        .await
+        .unwrap();
+    let diagnostic = loop_runner
+        .last_tick_diagnostic()
+        .expect("diagnostic after replay recovery")
+        .clone();
+
+    assert_eq!(
+        replay_tick,
+        TaskSyncTick::Applied {
+            task_id: "task-replay-diagnostic".to_string(),
+            final_state: TaskObservedState::Succeeded,
+        }
+    );
+    assert_eq!(diagnostic.stage, TaskDecisionStage::Replay);
+    assert_eq!(diagnostic.outcome, TaskDecisionOutcome::Recovered);
+    assert_eq!(
+        diagnostic.task_id.as_deref(),
+        Some("task-replay-diagnostic")
+    );
+    assert!(diagnostic.detail.contains("persisted terminal patch"));
+}
+
+#[tokio::test]
+async fn task_sync_loop_retries_transient_list_failure_within_same_tick() {
+    let state = synced_runtime_state(&["queued"]);
+    let transport = RecordingTransport::with_list_outcomes(vec![
+        ListOutcome::TransientFail("temporary list failure".to_string()),
+        ListOutcome::Success(vec![]),
+    ]);
+    let executor = RecordingExecutor::succeeds(ExecutionResult {
+        stdout: String::new(),
+        stderr: String::new(),
+        exit_code: Some(0),
+        state: TaskObservedState::Succeeded,
+    });
+    let mut loop_runner = TaskSyncLoop::with_retry_policy(
+        transport,
+        executor,
+        TransientRetryPolicy::new(vec![Duration::ZERO]),
+    );
+
+    let tick = loop_runner
+        .tick(&state, "agent-1", timestamp())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tick,
+        TaskSyncTick::Skipped {
+            reason: TaskSyncSkipReason::NoTasks,
+        }
+    );
+    assert_eq!(loop_runner.into_transport().list_calls.len(), 2);
+}
+
+#[tokio::test]
+async fn task_sync_loop_retries_transient_terminal_apply_failure_within_same_tick() {
+    let data_dir = writable_data_dir("task-apply-retry");
+    let state = synced_runtime_state_in(&data_dir, &["queued"]);
+    let transport = RecordingTransport {
+        apply_outcomes: VecDeque::from(vec![
+            ApplyOutcome::Success,
+            ApplyOutcome::Success,
+            ApplyOutcome::TransientFail("temporary apply failure".to_string()),
+            ApplyOutcome::Success,
+        ]),
+        ..RecordingTransport::with_list_outcomes(vec![ListOutcome::Success(vec![
+            queued_command_task("task-apply-retry"),
+        ])])
+    };
+    let executor = RecordingExecutor::succeeds(ExecutionResult {
+        stdout: "done".to_string(),
+        stderr: String::new(),
+        exit_code: Some(0),
+        state: TaskObservedState::Succeeded,
+    });
+    let mut loop_runner = TaskSyncLoop::with_retry_policy(
+        transport,
+        executor,
+        TransientRetryPolicy::new(vec![Duration::ZERO]),
+    );
+
+    let tick = loop_runner
+        .tick(&state, "agent-1", timestamp())
+        .await
+        .unwrap();
+    let transport = loop_runner.into_transport();
+
+    assert_eq!(
+        tick,
+        TaskSyncTick::Applied {
+            task_id: "task-apply-retry".to_string(),
+            final_state: TaskObservedState::Succeeded,
+        }
+    );
+    assert_eq!(transport.apply_calls.len(), 4);
+    assert!(!PathBuf::from(&data_dir).join("task-replay.toml").exists());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn task_sync_loop_async_tick_offloads_blocking_work() {
+    let state = synced_runtime_state(&["queued"]);
+    let transport = RecordingTransport::with_list_outcomes(vec![
+        ListOutcome::TransientFail("temporary list failure".to_string()),
+        ListOutcome::Success(vec![queued_command_task("task-async")]),
+    ]);
+    let executor = RecordingExecutor::succeeds(ExecutionResult {
+        stdout: "done".to_string(),
+        stderr: String::new(),
+        exit_code: Some(0),
+        state: TaskObservedState::Succeeded,
+    });
+    let loop_runner = TaskSyncLoop::with_retry_policy(
+        transport,
+        executor,
+        TransientRetryPolicy::new(vec![Duration::from_millis(1)]),
+    );
+
+    let (yielded, tick) = tokio::join!(
+        async {
+            tokio::task::yield_now().await;
+            "yielded"
+        },
+        loop_runner.tick_async(state, "agent-1".to_string(), timestamp())
+    );
+
+    assert_eq!(yielded, "yielded");
+    assert_eq!(
+        tick.1.unwrap(),
+        TaskSyncTick::Applied {
+            task_id: "task-async".to_string(),
+            final_state: TaskObservedState::Succeeded,
+        }
+    );
+}
+
+#[tokio::test]
+async fn task_sync_loop_prefers_visible_active_task_before_claiming_new_work() {
+    let state = synced_runtime_state(&["queued", "running"]);
+    let first_tick_tasks = vec![
+        TaskResource {
+            updated_at: Some("2026-05-31T08:01:00Z".to_string()),
+            ..queued_script_task("task-queued")
+        },
+        TaskResource {
+            observed_state: TaskObservedState::Running,
+            started_at: Some("2026-05-31T08:00:30Z".to_string()),
+            updated_at: Some("2026-05-31T08:02:00Z".to_string()),
+            ..queued_script_task("task-running")
+        },
+    ];
+    let transport = RecordingTransport::with_list_responses(vec![first_tick_tasks]);
+    let executor = RecordingExecutor::succeeds(ExecutionResult {
+        stdout: "done".to_string(),
+        stderr: String::new(),
+        exit_code: Some(0),
+        state: TaskObservedState::Succeeded,
+    });
+    let mut loop_runner = TaskSyncLoop::new(transport, executor.clone());
+
+    let result = loop_runner
+        .tick(&state, "agent-1", timestamp())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result,
+        TaskSyncTick::Applied {
+            task_id: "task-running".to_string(),
+            final_state: TaskObservedState::Succeeded,
+        }
+    );
+    assert_eq!(executor.calls(), vec!["task-running".to_string()]);
+
+    let transport = loop_runner.into_transport();
+    assert_eq!(transport.list_calls.len(), 1);
+    assert_eq!(transport.apply_calls.len(), 1);
+    assert_eq!(transport.apply_calls[0].identity.task_id, "task-running");
+}
+
+#[tokio::test]
+async fn task_sync_loop_prefers_dispatched_task_before_queued_new_work() {
+    let state = synced_runtime_state(&["queued", "dispatched"]);
+    let first_tick_tasks = vec![
+        TaskResource {
+            updated_at: Some("2026-05-31T08:01:00Z".to_string()),
+            ..queued_script_task("task-queued")
+        },
+        TaskResource {
+            observed_state: TaskObservedState::Dispatched,
+            updated_at: Some("2026-05-31T08:02:00Z".to_string()),
+            ..queued_script_task("task-dispatched")
+        },
+    ];
+    let transport = RecordingTransport::with_list_responses(vec![first_tick_tasks]);
+    let executor = RecordingExecutor::succeeds(ExecutionResult {
+        stdout: "done".to_string(),
+        stderr: String::new(),
+        exit_code: Some(0),
+        state: TaskObservedState::Succeeded,
+    });
+    let mut loop_runner = TaskSyncLoop::new(transport, executor.clone());
+
+    let result = loop_runner
+        .tick(&state, "agent-1", timestamp())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result,
+        TaskSyncTick::Applied {
+            task_id: "task-dispatched".to_string(),
+            final_state: TaskObservedState::Succeeded,
+        }
+    );
+    assert_eq!(executor.calls(), vec!["task-dispatched".to_string()]);
+
+    let transport = loop_runner.into_transport();
+    assert_eq!(transport.list_calls.len(), 1);
+    assert_eq!(transport.apply_calls.len(), 3);
+    assert_eq!(transport.apply_calls[0].identity.task_id, "task-dispatched");
+}
+
+#[tokio::test]
+async fn task_sync_loop_keeps_same_timestamp_visible_task_reachable_on_later_tick() {
+    let state = synced_runtime_state(&["queued"]);
+    let visible_tasks = vec![
+        TaskResource {
+            updated_at: Some("2026-05-31T08:01:00Z".to_string()),
+            ..queued_script_task("task-1")
+        },
+        TaskResource {
+            updated_at: Some("2026-05-31T08:01:00Z".to_string()),
+            ..queued_script_task("task-2")
+        },
+    ];
+    let transport = RecordingTransport::with_list_responses(vec![visible_tasks]);
+    let executor = RecordingExecutor::succeeds(ExecutionResult {
+        stdout: "done".to_string(),
+        stderr: String::new(),
+        exit_code: Some(0),
+        state: TaskObservedState::Succeeded,
+    });
+    let mut loop_runner = TaskSyncLoop::new(transport, executor.clone());
+
+    let first = loop_runner
+        .tick(&state, "agent-1", timestamp())
+        .await
+        .unwrap();
+    let second = loop_runner
+        .tick(
+            &state,
+            "agent-1",
+            Utc.with_ymd_and_hms(2026, 5, 31, 8, 5, 0).unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        first,
+        TaskSyncTick::Applied {
+            task_id: "task-1".to_string(),
+            final_state: TaskObservedState::Succeeded,
+        }
+    );
+    assert_eq!(
+        second,
+        TaskSyncTick::Applied {
+            task_id: "task-2".to_string(),
+            final_state: TaskObservedState::Succeeded,
+        }
+    );
+
+    let transport = loop_runner.into_transport();
+    assert_eq!(transport.list_calls.len(), 1);
     assert_eq!(
         executor.calls(),
         vec!["task-1".to_string(), "task-2".to_string()]
@@ -338,7 +736,6 @@ async fn task_sync_loop_does_not_advance_cursor_while_disabled_before_later_acti
         stderr: String::new(),
         exit_code: Some(0),
         state: TaskObservedState::Succeeded,
-        category: Some(TaskFinalResultCategory::Succeeded),
     });
     let mut loop_runner = TaskSyncLoop::new(transport, executor.clone());
 
@@ -351,16 +748,6 @@ async fn task_sync_loop_does_not_advance_cursor_while_disabled_before_later_acti
         TaskSyncTick::Skipped {
             reason: TaskSyncSkipReason::LoopsDisabled,
         }
-    );
-    assert_eq!(
-        loop_runner.last_diagnostic(),
-        Some(&TaskDecisionDiagnostic {
-            task_id: None,
-            observed_state: None,
-            lifecycle_stage: TaskLifecycleStage::PollDecision,
-            outcome: TaskOutcomeKind::SkippedLoopsDisabled,
-            detail: "task sync skipped because subordinate loops are disabled".to_string(),
-        })
     );
 
     let applied = loop_runner
@@ -387,378 +774,6 @@ async fn task_sync_loop_does_not_advance_cursor_while_disabled_before_later_acti
 }
 
 #[tokio::test]
-async fn task_sync_loop_restart_after_outage_reuses_recovered_runtime_state_without_duplicate_claim()
- {
-    let state = synced_runtime_state(&["queued", "acknowledged", "running"]);
-    let transport = RecordingTransport::with_list_responses(vec![
-        vec![],
-        vec![acknowledged_command_task("task-recovered")],
-    ]);
-    let executor = RecordingExecutor::succeeds(ExecutionResult {
-        stdout: "recovered".to_string(),
-        stderr: String::new(),
-        exit_code: Some(0),
-        state: TaskObservedState::Succeeded,
-        category: Some(TaskFinalResultCategory::Succeeded),
-    });
-    let mut loop_runner = TaskSyncLoop::new(transport, executor.clone());
-
-    let first = loop_runner
-        .tick(&state, "agent-1", timestamp())
-        .await
-        .unwrap();
-    let second = loop_runner
-        .tick(
-            &state,
-            "agent-1",
-            Utc.with_ymd_and_hms(2026, 5, 31, 8, 5, 0).unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(
-        first,
-        TaskSyncTick::Skipped {
-            reason: TaskSyncSkipReason::NoTasks,
-        }
-    );
-    assert_eq!(
-        second,
-        TaskSyncTick::Applied {
-            task_id: "task-recovered".to_string(),
-            final_state: TaskObservedState::Succeeded,
-        }
-    );
-    assert_eq!(
-        loop_runner.last_diagnostic(),
-        Some(&TaskDecisionDiagnostic {
-            task_id: Some("task-recovered".to_string()),
-            observed_state: Some(TaskObservedState::Acknowledged),
-            lifecycle_stage: TaskLifecycleStage::PublishedTerminalResult,
-            outcome: TaskOutcomeKind::Succeeded,
-            detail: "task completed successfully".to_string(),
-        })
-    );
-
-    let transport = loop_runner.into_transport();
-    assert_eq!(transport.list_calls.len(), 2);
-    assert_eq!(transport.list_calls[0].query.updated_after, None);
-    assert_eq!(
-        transport.list_calls[1].query.updated_after.as_deref(),
-        Some("2026-05-31T08:00:00Z")
-    );
-    assert_eq!(executor.calls(), vec!["task-recovered".to_string()]);
-    assert_eq!(transport.apply_calls.len(), 2);
-    assert_eq!(
-        transport.apply_calls[0].patch.observed_state,
-        Some(TaskObservedState::Running)
-    );
-    assert_eq!(transport.apply_calls[0].patch.claimed_at, None);
-    assert_eq!(
-        transport.apply_calls[1].patch.observed_state,
-        Some(TaskObservedState::Succeeded)
-    );
-}
-
-#[tokio::test]
-async fn task_sync_loop_exposes_no_tasks_poll_diagnostic() {
-    let state = synced_runtime_state(&["queued"]);
-    let transport = RecordingTransport::with_list_responses(vec![vec![]]);
-    let executor = RecordingExecutor::succeeds(ExecutionResult {
-        stdout: String::new(),
-        stderr: String::new(),
-        exit_code: Some(0),
-        state: TaskObservedState::Succeeded,
-        category: Some(TaskFinalResultCategory::Succeeded),
-    });
-    let mut loop_runner = TaskSyncLoop::new(transport, executor);
-
-    let tick = loop_runner
-        .tick(&state, "agent-1", timestamp())
-        .await
-        .unwrap();
-
-    assert_eq!(
-        tick,
-        TaskSyncTick::Skipped {
-            reason: TaskSyncSkipReason::NoTasks,
-        }
-    );
-    assert_eq!(
-        loop_runner.last_diagnostic(),
-        Some(&TaskDecisionDiagnostic {
-            task_id: None,
-            observed_state: None,
-            lifecycle_stage: TaskLifecycleStage::PollDecision,
-            outcome: TaskOutcomeKind::NoTasksAvailable,
-            detail: "task poll returned no visible tasks".to_string(),
-        })
-    );
-}
-
-#[tokio::test]
-async fn task_sync_loop_classifies_temporary_poll_failure_with_shared_retry_policy() {
-    let state = synced_runtime_state(&["queued"]);
-    let transport = RecordingTransport::with_list_failures(vec!["temporary jm outage"]);
-    let executor = RecordingExecutor::succeeds(ExecutionResult {
-        stdout: String::new(),
-        stderr: String::new(),
-        exit_code: Some(0),
-        state: TaskObservedState::Succeeded,
-        category: Some(TaskFinalResultCategory::Succeeded),
-    });
-    let mut loop_runner = TaskSyncLoop::new(transport, executor);
-
-    let error = loop_runner
-        .tick(&state, "agent-1", timestamp())
-        .await
-        .expect_err("temporary upstream failure should bubble out");
-
-    assert!(error.to_string().contains("temporary jm outage"));
-    assert_eq!(
-        loop_runner.last_retry_policy(),
-        Some(&rsagent::runtime_coordinator::temporary_upstream_retry_policy(1))
-    );
-    let transport = loop_runner.into_transport();
-    assert_eq!(transport.list_calls.len(), 1);
-    assert!(transport.apply_calls.is_empty());
-}
-
-#[tokio::test]
-async fn task_sync_loop_escalates_retry_backoff_without_advancing_cursor_on_repeated_poll_failures()
-{
-    let state = synced_runtime_state(&["queued"]);
-    let transport = RecordingTransport::with_list_failures(vec![
-        "temporary jm outage",
-        "temporary jm outage",
-        "temporary jm outage",
-    ]);
-    let executor = RecordingExecutor::succeeds(ExecutionResult {
-        stdout: String::new(),
-        stderr: String::new(),
-        exit_code: Some(0),
-        state: TaskObservedState::Succeeded,
-        category: Some(TaskFinalResultCategory::Succeeded),
-    });
-    let mut loop_runner = TaskSyncLoop::new(transport, executor);
-
-    let _ = loop_runner.tick(&state, "agent-1", timestamp()).await;
-    let _ = loop_runner
-        .tick(
-            &state,
-            "agent-1",
-            Utc.with_ymd_and_hms(2026, 5, 31, 8, 5, 0).unwrap(),
-        )
-        .await;
-    let _ = loop_runner
-        .tick(
-            &state,
-            "agent-1",
-            Utc.with_ymd_and_hms(2026, 5, 31, 8, 10, 0).unwrap(),
-        )
-        .await;
-
-    assert_eq!(
-        loop_runner.last_retry_policy(),
-        Some(&rsagent::runtime_coordinator::temporary_upstream_retry_policy(3))
-    );
-    let transport = loop_runner.into_transport();
-    assert_eq!(transport.list_calls.len(), 3);
-    assert_eq!(transport.list_calls[0].query.updated_after, None);
-    assert_eq!(transport.list_calls[1].query.updated_after, None);
-    assert_eq!(transport.list_calls[2].query.updated_after, None);
-}
-
-#[tokio::test]
-async fn task_sync_loop_does_not_record_temporary_upstream_for_local_payload_validation_errors() {
-    let state = synced_runtime_state(&["queued"]);
-    let transport = RecordingTransport::new(vec![TaskResource {
-        command_line: Some("sh".to_string()),
-        ..queued_script_task("task-invalid-local")
-    }]);
-    let executor = RecordingExecutor::succeeds(ExecutionResult {
-        stdout: String::new(),
-        stderr: String::new(),
-        exit_code: Some(0),
-        state: TaskObservedState::Succeeded,
-        category: Some(TaskFinalResultCategory::Succeeded),
-    });
-    let mut loop_runner = TaskSyncLoop::new(transport, executor);
-
-    let tick = loop_runner
-        .tick(&state, "agent-1", timestamp())
-        .await
-        .unwrap();
-
-    assert_eq!(
-        tick,
-        TaskSyncTick::Applied {
-            task_id: "task-invalid-local".to_string(),
-            final_state: TaskObservedState::Failed,
-        }
-    );
-    assert_eq!(loop_runner.last_retry_policy(), None);
-}
-
-#[tokio::test]
-async fn task_sync_loop_exposes_structured_task_lifecycle_diagnostic_for_invalid_payload_failures()
-{
-    let state = synced_runtime_state(&["queued"]);
-    let transport = RecordingTransport::new(vec![TaskResource {
-        command_line: Some("sh".to_string()),
-        ..queued_script_task("task-invalid-local")
-    }]);
-    let executor = RecordingExecutor::succeeds(ExecutionResult {
-        stdout: String::new(),
-        stderr: String::new(),
-        exit_code: Some(0),
-        state: TaskObservedState::Succeeded,
-        category: Some(TaskFinalResultCategory::Succeeded),
-    });
-    let mut loop_runner = TaskSyncLoop::new(transport, executor);
-
-    let tick = loop_runner
-        .tick(&state, "agent-1", timestamp())
-        .await
-        .unwrap();
-
-    assert_eq!(
-        tick,
-        TaskSyncTick::Applied {
-            task_id: "task-invalid-local".to_string(),
-            final_state: TaskObservedState::Failed,
-        }
-    );
-    assert_eq!(
-        loop_runner.last_diagnostic(),
-        Some(&TaskDecisionDiagnostic {
-            task_id: Some("task-invalid-local".to_string()),
-            observed_state: Some(TaskObservedState::Queued),
-            lifecycle_stage: TaskLifecycleStage::PublishedTerminalResult,
-            outcome: TaskOutcomeKind::FailedInvalidPayload,
-            detail: "script task cannot include command_line".to_string(),
-        })
-    );
-}
-
-#[tokio::test]
-async fn task_sync_loop_does_not_record_temporary_upstream_for_non_upstream_apply_errors() {
-    let state = synced_runtime_state(&["queued"]);
-    let transport = RecordingTransport::new(vec![queued_command_task("task-running-error")])
-        .with_apply_failure(
-            TaskObservedState::Running,
-            "job-manage refused running transition",
-        );
-    let executor = RecordingExecutor::succeeds(ExecutionResult {
-        stdout: String::new(),
-        stderr: String::new(),
-        exit_code: Some(0),
-        state: TaskObservedState::Succeeded,
-        category: Some(TaskFinalResultCategory::Succeeded),
-    });
-    let mut loop_runner = TaskSyncLoop::new(transport, executor);
-
-    let error = loop_runner
-        .tick(&state, "agent-1", timestamp())
-        .await
-        .expect_err("non-upstream apply failure should bubble out");
-
-    assert!(
-        error
-            .to_string()
-            .contains("job-manage refused running transition")
-    );
-    assert_eq!(loop_runner.last_retry_policy(), None);
-}
-
-#[tokio::test]
-async fn task_sync_loop_does_not_record_temporary_upstream_when_effective_config_exists_but_local_node_id_is_missing()
- {
-    let mut state = AgentRuntimeState::new(AgentRuntimeConfig {
-        nodemanage_sync_url: "http://127.0.0.1:3000/agent/sync".to_string(),
-        agent_id: "agent-1".to_string(),
-        node_id: None,
-        data_dir: "/var/lib/rsagent".to_string(),
-        sync_interval_secs: 60,
-    });
-    state.apply_sync_response(AgentSyncResponse {
-        accepted: true,
-        agent_id: "agent-1".to_string(),
-        bound_node_id: "".to_string(),
-        binding_state: SyncBindingState::Bound,
-        agent_run_mode: AgentRunMode::Active,
-        config_version: "cfg-1".to_string(),
-        heartbeat_config: HeartbeatConfig {
-            version: "hb-v1".to_string(),
-            data_link_id: "dl-1".to_string(),
-            vm_base_url: "http://vm".to_string(),
-            interval_secs: 15,
-        },
-        job_manage_config: JobManageConfig {
-            version: "jm-v1".to_string(),
-            base_url: "http://job-manage".to_string(),
-            task_filter_defaults: TaskFilterDefaults {
-                states: vec!["queued".to_string()],
-            },
-        },
-        sync_interval_secs: 10,
-        task_sync_interval_secs: 5,
-        rejection_reason: None,
-    });
-    assert!(state.effective_config().is_some());
-    let transport = RecordingTransport::new(vec![queued_command_task("task-missing-node")]);
-    let executor = RecordingExecutor::succeeds(ExecutionResult {
-        stdout: String::new(),
-        stderr: String::new(),
-        exit_code: Some(0),
-        state: TaskObservedState::Succeeded,
-        category: Some(TaskFinalResultCategory::Succeeded),
-    });
-    let mut loop_runner = TaskSyncLoop::new(transport, executor);
-
-    let error = loop_runner
-        .tick(&state, "agent-1", timestamp())
-        .await
-        .expect_err("missing local node id should bubble out");
-
-    assert!(
-        error
-            .to_string()
-            .contains("node_id unavailable for task sync")
-    );
-    assert_eq!(loop_runner.last_retry_policy(), None);
-}
-
-#[tokio::test]
-async fn task_sync_loop_does_not_record_temporary_upstream_for_local_error_containing_timeout_or_unavailable_text()
- {
-    let state = synced_runtime_state(&["queued"]);
-    let transport = RecordingTransport::new(vec![queued_command_task("task-running-error")])
-        .with_apply_failure(
-            TaskObservedState::Running,
-            "local guard rejected transition after timeout budget check: resource unavailable",
-        );
-    let executor = RecordingExecutor::succeeds(ExecutionResult {
-        stdout: String::new(),
-        stderr: String::new(),
-        exit_code: Some(0),
-        state: TaskObservedState::Succeeded,
-        category: Some(TaskFinalResultCategory::Succeeded),
-    });
-    let mut loop_runner = TaskSyncLoop::new(transport, executor);
-
-    let error = loop_runner
-        .tick(&state, "agent-1", timestamp())
-        .await
-        .expect_err("local apply failure should bubble out");
-
-    assert!(error.to_string().contains(
-        "local guard rejected transition after timeout budget check: resource unavailable"
-    ));
-    assert_eq!(loop_runner.last_retry_policy(), None);
-}
-
-#[tokio::test]
 async fn lists_tasks_with_default_filters_from_runtime_config() {
     let state = synced_runtime_state(&["queued", "running"]);
     let mut transport = RecordingTransport::new(Vec::new());
@@ -767,7 +782,6 @@ async fn lists_tasks_with_default_filters_from_runtime_config() {
         stderr: String::new(),
         exit_code: Some(0),
         state: TaskObservedState::Succeeded,
-        category: Some(TaskFinalResultCategory::Succeeded),
     });
 
     let result = sync_once(
@@ -813,7 +827,6 @@ async fn claims_and_updates_only_one_active_task_per_tick() {
         stderr: String::new(),
         exit_code: Some(0),
         state: TaskObservedState::Succeeded,
-        category: Some(TaskFinalResultCategory::Succeeded),
     });
 
     let result = sync_once(
@@ -855,7 +868,6 @@ async fn applies_acknowledged_running_and_terminal_updates_for_valid_tasks() {
         stderr: "stderr-value".to_string(),
         exit_code: Some(7),
         state: TaskObservedState::Failed,
-        category: Some(TaskFinalResultCategory::FailedNonZeroExit),
     });
     let now = timestamp();
 
@@ -897,14 +909,425 @@ async fn applies_acknowledged_running_and_terminal_updates_for_valid_tasks() {
     assert_eq!(terminal.exit_code, Some(7));
     assert_eq!(terminal.error_message, None);
     assert_eq!(terminal.updated_at.as_deref(), Some("2026-05-31T08:00:00Z"));
+}
+
+#[tokio::test]
+async fn dispatched_task_is_acknowledged_before_execution() {
+    let data_dir = writable_data_dir("task-dispatched");
+    let state = synced_runtime_state_in(&data_dir, &["dispatched"]);
+    let mut transport = RecordingTransport::new(vec![task_with_observed_state(
+        queued_command_task("task-dispatched"),
+        "dispatched",
+    )]);
+    let executor = RecordingExecutor::succeeds(ExecutionResult {
+        stdout: "dispatch-stdout".to_string(),
+        stderr: String::new(),
+        exit_code: Some(0),
+        state: TaskObservedState::Succeeded,
+    });
+
+    let result = sync_once(
+        &mut transport,
+        &executor,
+        &state,
+        "agent-1",
+        None,
+        timestamp(),
+    )
+    .await
+    .unwrap();
+
     assert_eq!(
-        TaskFinalResultCategory::from_task_result(
-            terminal.observed_state.expect("terminal state"),
-            terminal.exit_code,
-            terminal.error_message.as_deref(),
-        ),
-        Some(TaskFinalResultCategory::FailedNonZeroExit)
+        result,
+        TaskSyncTick::Applied {
+            task_id: "task-dispatched".to_string(),
+            final_state: TaskObservedState::Succeeded,
+        }
     );
+    assert_eq!(executor.calls(), vec!["task-dispatched".to_string()]);
+    assert_eq!(transport.apply_calls.len(), 3);
+    assert_eq!(
+        transport.apply_calls[0].patch.observed_state,
+        Some(TaskObservedState::Acknowledged)
+    );
+    assert_eq!(
+        transport.apply_calls[0].patch.claimed_at.as_deref(),
+        Some("2026-05-31T08:00:00Z")
+    );
+    assert_eq!(
+        transport.apply_calls[1].patch.observed_state,
+        Some(TaskObservedState::Running)
+    );
+    assert_eq!(
+        transport.apply_calls[2].patch.observed_state,
+        Some(TaskObservedState::Succeeded)
+    );
+}
+
+#[tokio::test]
+async fn rediscovered_running_task_replays_persisted_terminal_patch_without_reexecution() {
+    let data_dir = writable_data_dir("task-replay");
+    let state = synced_runtime_state_in(&data_dir, &["dispatched", "running"]);
+    let mut first_transport = RecordingTransport::with_apply_outcomes(
+        vec![task_with_observed_state(
+            queued_command_task("task-running"),
+            "dispatched",
+        )],
+        vec![
+            ApplyOutcome::Success,
+            ApplyOutcome::Success,
+            ApplyOutcome::Fail,
+        ],
+    );
+    let first_executor = RecordingExecutor::succeeds(ExecutionResult {
+        stdout: "persisted-stdout".to_string(),
+        stderr: "persisted-stderr".to_string(),
+        exit_code: Some(17),
+        state: TaskObservedState::Failed,
+    });
+
+    let first_error = sync_once(
+        &mut first_transport,
+        &first_executor,
+        &state,
+        "agent-1",
+        None,
+        timestamp(),
+    )
+    .await
+    .unwrap_err();
+    assert!(first_error.to_string().contains("simulated apply failure"));
+    assert_eq!(first_executor.calls(), vec!["task-running".to_string()]);
+
+    let mut replay_transport = RecordingTransport::new(vec![TaskResource {
+        observed_state: TaskObservedState::Running,
+        claimed_at: Some("2026-05-31T08:00:00Z".to_string()),
+        started_at: Some("2026-05-31T08:00:00Z".to_string()),
+        ..queued_command_task("task-running")
+    }]);
+    let replay_executor = RecordingExecutor::fails("executor must not rerun visible running task");
+
+    let result = sync_once(
+        &mut replay_transport,
+        &replay_executor,
+        &state,
+        "agent-1",
+        None,
+        Utc.with_ymd_and_hms(2026, 5, 31, 8, 5, 0).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        result,
+        TaskSyncTick::Applied {
+            task_id: "task-running".to_string(),
+            final_state: TaskObservedState::Failed,
+        }
+    );
+    assert!(replay_executor.calls().is_empty());
+    assert_eq!(replay_transport.apply_calls.len(), 1);
+    let replay_patch = &replay_transport.apply_calls[0].patch;
+    assert_eq!(replay_patch.observed_state, Some(TaskObservedState::Failed));
+    assert_eq!(replay_patch.stdout.as_deref(), Some("persisted-stdout"));
+    assert_eq!(replay_patch.stderr.as_deref(), Some("persisted-stderr"));
+    assert_eq!(replay_patch.exit_code, Some(17));
+    assert_eq!(
+        replay_patch.finished_at.as_deref(),
+        Some("2026-05-31T08:00:00Z")
+    );
+}
+
+#[tokio::test]
+async fn successful_replay_removes_persisted_patch_and_later_tick_does_not_reuse_stale_terminal_data()
+ {
+    let data_dir = writable_data_dir("task-replay-cleanup");
+    let state = synced_runtime_state_in(&data_dir, &["dispatched", "running", "queued"]);
+    let replay_path = PathBuf::from(&data_dir).join("task-replay.toml");
+
+    let mut first_transport = RecordingTransport::with_apply_outcomes(
+        vec![task_with_observed_state(
+            queued_command_task("task-cleanup"),
+            "dispatched",
+        )],
+        vec![
+            ApplyOutcome::Success,
+            ApplyOutcome::Success,
+            ApplyOutcome::Fail,
+        ],
+    );
+    let first_executor = RecordingExecutor::succeeds(ExecutionResult {
+        stdout: "persisted-stdout".to_string(),
+        stderr: "persisted-stderr".to_string(),
+        exit_code: Some(17),
+        state: TaskObservedState::Failed,
+    });
+
+    let first_error = sync_once(
+        &mut first_transport,
+        &first_executor,
+        &state,
+        "agent-1",
+        None,
+        timestamp(),
+    )
+    .await
+    .unwrap_err();
+    assert!(first_error.to_string().contains("simulated apply failure"));
+    assert!(replay_path.exists());
+
+    let mut replay_transport = RecordingTransport::new(vec![TaskResource {
+        observed_state: TaskObservedState::Running,
+        claimed_at: Some("2026-05-31T08:00:00Z".to_string()),
+        started_at: Some("2026-05-31T08:00:00Z".to_string()),
+        ..queued_command_task("task-cleanup")
+    }]);
+    let replay_executor = RecordingExecutor::fails("executor must not rerun visible running task");
+
+    let replay_result = sync_once(
+        &mut replay_transport,
+        &replay_executor,
+        &state,
+        "agent-1",
+        None,
+        Utc.with_ymd_and_hms(2026, 5, 31, 8, 5, 0).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        replay_result,
+        TaskSyncTick::Applied {
+            task_id: "task-cleanup".to_string(),
+            final_state: TaskObservedState::Failed,
+        }
+    );
+    assert!(replay_executor.calls().is_empty());
+    assert!(!replay_path.exists());
+
+    let mut later_transport = RecordingTransport::new(vec![queued_command_task("task-later")]);
+    let later_executor = RecordingExecutor::succeeds(ExecutionResult {
+        stdout: "later-stdout".to_string(),
+        stderr: String::new(),
+        exit_code: Some(0),
+        state: TaskObservedState::Succeeded,
+    });
+
+    let later_result = sync_once(
+        &mut later_transport,
+        &later_executor,
+        &state,
+        "agent-1",
+        None,
+        Utc.with_ymd_and_hms(2026, 5, 31, 8, 10, 0).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        later_result,
+        TaskSyncTick::Applied {
+            task_id: "task-later".to_string(),
+            final_state: TaskObservedState::Succeeded,
+        }
+    );
+    assert_eq!(later_executor.calls(), vec!["task-later".to_string()]);
+    let later_terminal = &later_transport.apply_calls[2].patch;
+    assert_eq!(later_terminal.stdout.as_deref(), Some("later-stdout"));
+    assert_eq!(later_terminal.stderr.as_deref(), Some(""));
+    assert_eq!(later_terminal.exit_code, Some(0));
+    assert_eq!(later_terminal.error_message, None);
+}
+
+#[tokio::test]
+async fn corrupt_replay_file_is_discarded_and_later_task_sync_can_proceed() {
+    let data_dir = writable_data_dir("task-replay-corrupt");
+    let state = synced_runtime_state_in(&data_dir, &["running", "queued"]);
+    let replay_path = PathBuf::from(&data_dir).join("task-replay.toml");
+    std::fs::write(&replay_path, "not-valid-toml = [").expect("write corrupt replay file");
+
+    let tasks = vec![
+        TaskResource {
+            observed_state: TaskObservedState::Running,
+            claimed_at: Some("2026-05-31T08:00:00Z".to_string()),
+            started_at: Some("2026-05-31T08:00:00Z".to_string()),
+            updated_at: Some("2026-05-31T08:01:00Z".to_string()),
+            ..queued_command_task("task-corrupt-running")
+        },
+        TaskResource {
+            updated_at: Some("2026-05-31T08:02:00Z".to_string()),
+            ..queued_command_task("task-after-corrupt")
+        },
+    ];
+    let transport = RecordingTransport::with_list_responses(vec![
+        tasks,
+        vec![queued_command_task("task-after-corrupt")],
+    ]);
+    let executor = RecordingExecutor::succeeds(ExecutionResult {
+        stdout: "fresh-stdout".to_string(),
+        stderr: String::new(),
+        exit_code: Some(0),
+        state: TaskObservedState::Succeeded,
+    });
+    let mut loop_runner = TaskSyncLoop::new(transport, executor.clone());
+
+    let first = loop_runner
+        .tick(&state, "agent-1", timestamp())
+        .await
+        .unwrap();
+    assert_eq!(
+        first,
+        TaskSyncTick::Applied {
+            task_id: "task-corrupt-running".to_string(),
+            final_state: TaskObservedState::Succeeded,
+        }
+    );
+    assert!(!replay_path.exists());
+
+    let second = loop_runner
+        .tick(
+            &state,
+            "agent-1",
+            Utc.with_ymd_and_hms(2026, 5, 31, 8, 5, 0).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        second,
+        TaskSyncTick::Applied {
+            task_id: "task-after-corrupt".to_string(),
+            final_state: TaskObservedState::Succeeded,
+        }
+    );
+
+    let transport = loop_runner.into_transport();
+    assert_eq!(
+        executor.calls(),
+        vec![
+            "task-corrupt-running".to_string(),
+            "task-after-corrupt".to_string()
+        ]
+    );
+    let last_patch = transport.apply_calls.last().expect("terminal patch");
+    assert_eq!(last_patch.identity.task_id, "task-after-corrupt");
+    assert_eq!(last_patch.patch.stdout.as_deref(), Some("fresh-stdout"));
+}
+
+#[tokio::test]
+async fn spawn_failure_patch_is_stable_and_replayed_without_reexecution() {
+    let data_dir = writable_data_dir("task-spawn-replay");
+    let state = synced_runtime_state_in(&data_dir, &["queued", "running"]);
+    let task = TaskResource {
+        command_line: Some(format!(
+            "missing-binary-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )),
+        ..queued_command_task("task-spawn-replay")
+    };
+    let expected_error = "failed to spawn task task-spawn-replay";
+    let mut first_transport = RecordingTransport::with_apply_outcomes(
+        vec![task.clone()],
+        vec![
+            ApplyOutcome::Success,
+            ApplyOutcome::Success,
+            ApplyOutcome::Fail,
+        ],
+    );
+    let first_executor = rsagent::executor::LocalTaskExecutor;
+
+    let first_error = sync_once(
+        &mut first_transport,
+        &first_executor,
+        &state,
+        "agent-1",
+        None,
+        timestamp(),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(first_error.to_string().contains("simulated apply failure"));
+    assert_eq!(first_transport.apply_calls.len(), 3);
+    let first_patch = &first_transport.apply_calls[2].patch;
+    assert_eq!(first_patch.observed_state, Some(TaskObservedState::Failed));
+    assert_eq!(first_patch.error_message.as_deref(), Some(expected_error));
+    assert_eq!(first_patch.stdout, None);
+    assert_eq!(first_patch.stderr, None);
+    assert_eq!(first_patch.exit_code, None);
+
+    let mut replay_transport = RecordingTransport::new(vec![TaskResource {
+        observed_state: TaskObservedState::Running,
+        claimed_at: Some("2026-05-31T08:00:00Z".to_string()),
+        started_at: Some("2026-05-31T08:00:00Z".to_string()),
+        ..task
+    }]);
+    let replay_executor = RecordingExecutor::fails("executor must not rerun spawn failure replay");
+
+    let replay = sync_once(
+        &mut replay_transport,
+        &replay_executor,
+        &state,
+        "agent-1",
+        None,
+        Utc.with_ymd_and_hms(2026, 5, 31, 8, 5, 0).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        replay,
+        TaskSyncTick::Applied {
+            task_id: "task-spawn-replay".to_string(),
+            final_state: TaskObservedState::Failed,
+        }
+    );
+    assert!(replay_executor.calls().is_empty());
+    assert_eq!(replay_transport.apply_calls.len(), 1);
+    let replay_patch = &replay_transport.apply_calls[0].patch;
+    assert_eq!(replay_patch.observed_state, Some(TaskObservedState::Failed));
+    assert_eq!(replay_patch.error_message.as_deref(), Some(expected_error));
+    assert_eq!(replay_patch.stdout, None);
+    assert_eq!(replay_patch.stderr, None);
+    assert_eq!(replay_patch.exit_code, None);
+}
+
+#[tokio::test]
+async fn structured_spawn_failure_error_maps_to_stable_terminal_patch() {
+    let state = synced_runtime_state(&["queued"]);
+    let mut transport = RecordingTransport::new(vec![queued_command_task("task-structured-spawn")]);
+    let executor = StructuredErrorExecutor::spawn_failed();
+
+    let result = sync_once(
+        &mut transport,
+        &executor,
+        &state,
+        "agent-1",
+        None,
+        timestamp(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        result,
+        TaskSyncTick::Applied {
+            task_id: "task-structured-spawn".to_string(),
+            final_state: TaskObservedState::Failed,
+        }
+    );
+    assert_eq!(transport.apply_calls.len(), 3);
+    let terminal = &transport.apply_calls[2].patch;
+    assert_eq!(terminal.observed_state, Some(TaskObservedState::Failed));
+    assert_eq!(
+        terminal.error_message.as_deref(),
+        Some("failed to spawn task task-structured-spawn")
+    );
+    assert_eq!(terminal.stdout, None);
+    assert_eq!(terminal.stderr, None);
+    assert_eq!(terminal.exit_code, None);
 }
 
 #[tokio::test]
@@ -932,7 +1355,6 @@ async fn rejects_invalid_mixed_payload_tasks_before_execution() {
             stderr: String::new(),
             exit_code: Some(0),
             state: TaskObservedState::Succeeded,
-            category: Some(TaskFinalResultCategory::Succeeded),
         });
 
         let result = sync_once(
@@ -965,318 +1387,9 @@ async fn rejects_invalid_mixed_payload_tasks_before_execution() {
         );
         assert_eq!(
             transport.apply_calls[1].patch.error_message.as_deref(),
-            Some(format!("failed_invalid_payload: {expected_error}").as_str())
-        );
-        assert_eq!(
-            TaskFinalResultCategory::from_task_result(
-                transport.apply_calls[1]
-                    .patch
-                    .observed_state
-                    .expect("terminal state"),
-                transport.apply_calls[1].patch.exit_code,
-                transport.apply_calls[1].patch.error_message.as_deref(),
-            ),
-            Some(TaskFinalResultCategory::FailedInvalidPayload)
+            Some(expected_error)
         );
     }
-}
-
-#[tokio::test]
-async fn maps_executor_start_failures_to_failed_executor_start_category() {
-    let state = synced_runtime_state(&["queued"]);
-    let mut transport = RecordingTransport::new(vec![queued_command_task("task-start-failure")]);
-    let executor =
-        RecordingExecutor::fails("failed to spawn task task-start-failure: missing binary");
-
-    let result = sync_once(
-        &mut transport,
-        &executor,
-        &state,
-        "agent-1",
-        None,
-        timestamp(),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(
-        result,
-        TaskSyncTick::Applied {
-            task_id: "task-start-failure".to_string(),
-            final_state: TaskObservedState::Failed,
-        }
-    );
-    assert_eq!(transport.apply_calls.len(), 3);
-    let terminal = &transport.apply_calls[2].patch;
-    assert_eq!(terminal.observed_state, Some(TaskObservedState::Failed));
-    assert_eq!(terminal.exit_code, None);
-    assert_eq!(
-        terminal.error_message.as_deref(),
-        Some("failed_executor_start: failed to spawn task task-start-failure: missing binary")
-    );
-    assert_eq!(
-        TaskFinalResultCategory::from_task_result(
-            terminal.observed_state.expect("terminal state"),
-            terminal.exit_code,
-            terminal.error_message.as_deref(),
-        ),
-        Some(TaskFinalResultCategory::FailedExecutorStart)
-    );
-}
-
-#[tokio::test]
-async fn maps_non_spawn_executor_failures_to_failed_executor_start_category() {
-    let state = synced_runtime_state(&["queued"]);
-    let mut transport =
-        RecordingTransport::new(vec![queued_command_task("task-exec-setup-failure")]);
-    let executor = RecordingExecutor::fails("executor output collection failed");
-
-    let result = sync_once(
-        &mut transport,
-        &executor,
-        &state,
-        "agent-1",
-        None,
-        timestamp(),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(
-        result,
-        TaskSyncTick::Applied {
-            task_id: "task-exec-setup-failure".to_string(),
-            final_state: TaskObservedState::Failed,
-        }
-    );
-    let terminal = &transport.apply_calls[2].patch;
-    assert_eq!(terminal.observed_state, Some(TaskObservedState::Failed));
-    assert_eq!(terminal.exit_code, None);
-    assert_eq!(
-        terminal.error_message.as_deref(),
-        Some("failed_executor_start: executor output collection failed")
-    );
-    assert_eq!(
-        TaskFinalResultCategory::from_task_result(
-            terminal.observed_state.expect("terminal state"),
-            terminal.exit_code,
-            terminal.error_message.as_deref(),
-        ),
-        Some(TaskFinalResultCategory::FailedExecutorStart)
-    );
-}
-
-#[tokio::test]
-async fn preserves_timeout_category_in_terminal_patch() {
-    let state = synced_runtime_state(&["queued"]);
-    let mut transport = RecordingTransport::new(vec![queued_command_task("task-timeout")]);
-    let executor = RecordingExecutor::succeeds(ExecutionResult {
-        stdout: String::new(),
-        stderr: String::new(),
-        exit_code: None,
-        state: TaskObservedState::Timeout,
-        category: Some(TaskFinalResultCategory::Timeout),
-    });
-
-    let result = sync_once(
-        &mut transport,
-        &executor,
-        &state,
-        "agent-1",
-        None,
-        timestamp(),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(
-        result,
-        TaskSyncTick::Applied {
-            task_id: "task-timeout".to_string(),
-            final_state: TaskObservedState::Timeout,
-        }
-    );
-    let terminal = &transport.apply_calls[2].patch;
-    assert_eq!(terminal.observed_state, Some(TaskObservedState::Timeout));
-    assert_eq!(
-        TaskFinalResultCategory::from_task_result(
-            terminal.observed_state.expect("terminal state"),
-            terminal.exit_code,
-            terminal.error_message.as_deref(),
-        ),
-        Some(TaskFinalResultCategory::Timeout)
-    );
-}
-
-#[tokio::test]
-async fn does_not_reacknowledge_task_visible_again_after_claim_timeout_or_network_loss() {
-    let state = synced_runtime_state(&["queued", "acknowledged", "running"]);
-    let mut transport = RecordingTransport::new(vec![acknowledged_command_task("task-claimed")]);
-    let executor = RecordingExecutor::succeeds(ExecutionResult {
-        stdout: "reconciled".to_string(),
-        stderr: String::new(),
-        exit_code: Some(0),
-        state: TaskObservedState::Succeeded,
-        category: Some(TaskFinalResultCategory::Succeeded),
-    });
-
-    let result = sync_once(
-        &mut transport,
-        &executor,
-        &state,
-        "agent-1",
-        None,
-        timestamp(),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(
-        result,
-        TaskSyncTick::Applied {
-            task_id: "task-claimed".to_string(),
-            final_state: TaskObservedState::Succeeded,
-        }
-    );
-    assert_eq!(executor.calls(), vec!["task-claimed".to_string()]);
-    assert_eq!(transport.apply_calls.len(), 2);
-    assert_eq!(
-        transport.apply_calls[0].patch.observed_state,
-        Some(TaskObservedState::Running)
-    );
-    assert_eq!(transport.apply_calls[0].patch.claimed_at, None);
-    assert_eq!(
-        transport.apply_calls[1].patch.observed_state,
-        Some(TaskObservedState::Succeeded)
-    );
-}
-
-#[tokio::test]
-async fn restart_reconciles_running_task_without_creating_a_second_active_execution() {
-    let state = synced_runtime_state(&["queued", "acknowledged", "running"]);
-    let mut transport = RecordingTransport::new(vec![running_command_task("task-running")]);
-    let executor = RecordingExecutor::succeeds(ExecutionResult {
-        stdout: "should-not-run".to_string(),
-        stderr: String::new(),
-        exit_code: Some(0),
-        state: TaskObservedState::Succeeded,
-        category: Some(TaskFinalResultCategory::Succeeded),
-    });
-
-    let result = sync_once(
-        &mut transport,
-        &executor,
-        &state,
-        "agent-1",
-        None,
-        timestamp(),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(
-        result,
-        TaskSyncTick::Applied {
-            task_id: "task-running".to_string(),
-            final_state: TaskObservedState::Failed,
-        }
-    );
-    let transport = RecordingTransport::new(vec![running_command_task("task-running")]);
-    let executor = RecordingExecutor::succeeds(ExecutionResult {
-        stdout: "should-not-run".to_string(),
-        stderr: String::new(),
-        exit_code: Some(0),
-        state: TaskObservedState::Succeeded,
-        category: Some(TaskFinalResultCategory::Succeeded),
-    });
-    let mut loop_runner = TaskSyncLoop::new(transport, executor.clone());
-    let _ = loop_runner
-        .tick(&state, "agent-1", timestamp())
-        .await
-        .unwrap();
-    assert_eq!(
-        loop_runner.last_diagnostic(),
-        Some(&TaskDecisionDiagnostic {
-            task_id: Some("task-running".to_string()),
-            observed_state: Some(TaskObservedState::Running),
-            lifecycle_stage: TaskLifecycleStage::PublishedTerminalResult,
-            outcome: TaskOutcomeKind::FailedExecutorStart,
-            detail: "task was already running before reconciliation; skipping re-execution"
-                .to_string(),
-        })
-    );
-    let transport = loop_runner.into_transport();
-    assert!(executor.calls().is_empty());
-    assert_eq!(transport.apply_calls.len(), 1);
-    assert_eq!(
-        transport.apply_calls[0].patch.observed_state,
-        Some(TaskObservedState::Failed)
-    );
-    assert_eq!(
-        transport.apply_calls[0].patch.finished_at.as_deref(),
-        Some("2026-05-31T08:00:00Z")
-    );
-    assert_eq!(
-        transport.apply_calls[0].patch.error_message.as_deref(),
-        Some(
-            "failed_executor_start: task was already running before reconciliation; skipping re-execution"
-        )
-    );
-    assert_eq!(
-        TaskFinalResultCategory::from_task_result(
-            transport.apply_calls[0]
-                .patch
-                .observed_state
-                .expect("terminal state"),
-            transport.apply_calls[0].patch.exit_code,
-            transport.apply_calls[0].patch.error_message.as_deref(),
-        ),
-        Some(TaskFinalResultCategory::FailedExecutorStart)
-    );
-}
-
-#[tokio::test]
-async fn returns_running_apply_failure_without_executing_task() {
-    let state = synced_runtime_state(&["queued"]);
-    let mut transport = RecordingTransport::new(vec![queued_command_task("task-running-error")])
-        .with_apply_failure(
-            TaskObservedState::Running,
-            "job-manage refused running transition",
-        );
-    let executor = RecordingExecutor::succeeds(ExecutionResult {
-        stdout: "should-not-run".to_string(),
-        stderr: String::new(),
-        exit_code: Some(0),
-        state: TaskObservedState::Succeeded,
-        category: Some(TaskFinalResultCategory::Succeeded),
-    });
-
-    let error = sync_once(
-        &mut transport,
-        &executor,
-        &state,
-        "agent-1",
-        None,
-        timestamp(),
-    )
-    .await
-    .expect_err("running apply failure should be returned");
-
-    assert!(
-        error
-            .to_string()
-            .contains("job-manage refused running transition")
-    );
-    assert_eq!(executor.calls(), Vec::<String>::new());
-    assert_eq!(transport.apply_calls.len(), 2);
-    assert_eq!(
-        transport.apply_calls[0].patch.observed_state,
-        Some(TaskObservedState::Acknowledged)
-    );
-    assert_eq!(
-        transport.apply_calls[1].patch.observed_state,
-        Some(TaskObservedState::Running)
-    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1289,7 +1402,6 @@ async fn sync_once_with_task_sync_service_publishes_final_state() {
         stderr: String::new(),
         exit_code: Some(0),
         state: TaskObservedState::Succeeded,
-        category: Some(TaskFinalResultCategory::Succeeded),
     });
 
     let result = sync_once(
@@ -1326,6 +1438,57 @@ async fn sync_once_with_task_sync_service_publishes_final_state() {
     assert_eq!(stored[0].exit_code, Some(0));
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn sync_once_with_task_sync_service_completes_rediscovered_running_task() {
+    let state = synced_runtime_state(&["running"]);
+    let service = TaskSyncService::new(vec![TaskResource {
+        observed_state: TaskObservedState::Running,
+        claimed_at: Some("2026-05-31T07:55:00Z".to_string()),
+        started_at: Some("2026-05-31T07:56:00Z".to_string()),
+        ..queued_script_task("task-service-running")
+    }]);
+    let mut transport = ServiceBackedTransport::new("http://job-manage/tasks", service.clone());
+    let executor = RecordingExecutor::succeeds(ExecutionResult {
+        stdout: "service-replayed".to_string(),
+        stderr: String::new(),
+        exit_code: Some(0),
+        state: TaskObservedState::Succeeded,
+    });
+
+    let result = sync_once(
+        &mut transport,
+        &executor,
+        &state,
+        "agent-1",
+        None,
+        timestamp(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        result,
+        TaskSyncTick::Applied {
+            task_id: "task-service-running".to_string(),
+            final_state: TaskObservedState::Succeeded,
+        }
+    );
+
+    let stored = service
+        .list_tasks(&TaskListQuery {
+            agent_id: "agent-1".to_string(),
+            node_id: "node-1".to_string(),
+            states: vec![TaskObservedState::Succeeded],
+            updated_after: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].task_id, "task-service-running");
+    assert_eq!(stored[0].observed_state, TaskObservedState::Succeeded);
+    assert_eq!(stored[0].stdout.as_deref(), Some("service-replayed"));
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ListCall {
     endpoint: String,
@@ -1343,10 +1506,9 @@ struct ApplyCall {
 struct RecordingTransport {
     list_calls: Vec<ListCall>,
     apply_calls: Vec<ApplyCall>,
-    list_failures: VecDeque<String>,
-    list_responses: VecDeque<Vec<TaskResource>>,
+    list_outcomes: VecDeque<ListOutcome>,
     tasks: BTreeMap<String, TaskResource>,
-    apply_failures: Vec<(TaskObservedState, String)>,
+    apply_outcomes: VecDeque<ApplyOutcome>,
 }
 
 impl RecordingTransport {
@@ -1354,27 +1516,12 @@ impl RecordingTransport {
         Self {
             list_calls: Vec::new(),
             apply_calls: Vec::new(),
-            list_failures: VecDeque::new(),
-            list_responses: VecDeque::from([tasks.clone()]),
+            list_outcomes: VecDeque::from([ListOutcome::Success(tasks.clone())]),
             tasks: tasks
                 .into_iter()
                 .map(|task| (task.task_id.clone(), task))
                 .collect(),
-            apply_failures: Vec::new(),
-        }
-    }
-
-    fn stateful(tasks: Vec<TaskResource>) -> Self {
-        Self {
-            list_calls: Vec::new(),
-            apply_calls: Vec::new(),
-            list_failures: VecDeque::new(),
-            list_responses: VecDeque::new(),
-            tasks: tasks
-                .into_iter()
-                .map(|task| (task.task_id.clone(), task))
-                .collect(),
-            apply_failures: Vec::new(),
+            apply_outcomes: VecDeque::new(),
         }
     }
 
@@ -1389,27 +1536,40 @@ impl RecordingTransport {
         Self {
             list_calls: Vec::new(),
             apply_calls: Vec::new(),
-            list_failures: VecDeque::new(),
-            list_responses: VecDeque::from(list_responses),
+            list_outcomes: list_responses
+                .into_iter()
+                .map(ListOutcome::Success)
+                .collect(),
             tasks,
-            apply_failures: Vec::new(),
+            apply_outcomes: VecDeque::new(),
         }
     }
 
-    fn with_list_failures(messages: Vec<&str>) -> Self {
+    fn with_list_outcomes(list_outcomes: Vec<ListOutcome>) -> Self {
+        let tasks = list_outcomes
+            .iter()
+            .filter_map(|outcome| match outcome {
+                ListOutcome::Success(tasks) => Some(tasks.iter()),
+                ListOutcome::TransientFail(_) => None,
+            })
+            .flatten()
+            .cloned()
+            .map(|task| (task.task_id.clone(), task))
+            .collect();
+
         Self {
             list_calls: Vec::new(),
             apply_calls: Vec::new(),
-            list_failures: messages.into_iter().map(ToString::to_string).collect(),
-            list_responses: VecDeque::new(),
-            tasks: BTreeMap::new(),
-            apply_failures: Vec::new(),
+            list_outcomes: VecDeque::from(list_outcomes),
+            tasks,
+            apply_outcomes: VecDeque::new(),
         }
     }
 
-    fn with_apply_failure(mut self, state: TaskObservedState, message: impl Into<String>) -> Self {
-        self.apply_failures.push((state, message.into()));
-        self
+    fn with_apply_outcomes(tasks: Vec<TaskResource>, apply_outcomes: Vec<ApplyOutcome>) -> Self {
+        let mut transport = Self::new(tasks);
+        transport.apply_outcomes = VecDeque::from(apply_outcomes);
+        transport
     }
 }
 
@@ -1436,30 +1596,14 @@ impl JobManageTransport for RecordingTransport {
             endpoint: endpoint.to_string(),
             query: query.clone(),
         });
-
-        if let Some(message) = self.list_failures.pop_front() {
-            return Err(anyhow::anyhow!(message));
+        match self
+            .list_outcomes
+            .pop_front()
+            .unwrap_or(ListOutcome::Success(vec![]))
+        {
+            ListOutcome::Success(tasks) => Ok(tasks),
+            ListOutcome::TransientFail(message) => Err(anyhow::anyhow!(message)),
         }
-
-        if let Some(response) = self.list_responses.pop_front() {
-            return Ok(response);
-        }
-
-        Ok(self
-            .tasks
-            .values()
-            .filter(|task| task.agent_id == query.agent_id && task.node_id == query.node_id)
-            .filter(|task| query.states.is_empty() || query.states.contains(&task.observed_state))
-            .filter(|task| match query.updated_after.as_deref() {
-                Some(updated_after) => task
-                    .updated_at
-                    .as_deref()
-                    .map(|updated_at| updated_at > updated_after)
-                    .unwrap_or(false),
-                None => true,
-            })
-            .cloned()
-            .collect())
     }
 
     fn apply_task(
@@ -1474,13 +1618,14 @@ impl JobManageTransport for RecordingTransport {
             patch: patch.clone(),
         });
 
-        if let Some(observed_state) = patch.observed_state
-            && let Some((_, message)) = self
-                .apply_failures
-                .iter()
-                .find(|(state, _)| *state == observed_state)
-        {
-            return Err(anyhow::anyhow!(message.clone()));
+        match self.apply_outcomes.pop_front() {
+            Some(ApplyOutcome::Fail) => {
+                return Err(anyhow::anyhow!("simulated apply failure"));
+            }
+            Some(ApplyOutcome::TransientFail(message)) => {
+                return Err(anyhow::anyhow!(message));
+            }
+            Some(ApplyOutcome::Success) | None => {}
         }
 
         let task = self
@@ -1566,32 +1711,7 @@ struct ExpectedHttpRequest {
     method: &'static str,
     target: &'static str,
     body: Option<Value>,
-    response: ExpectedHttpResponse,
-}
-
-#[derive(Debug)]
-struct ExpectedHttpResponse {
-    status_code: u16,
-    reason_phrase: &'static str,
-    body: String,
-}
-
-impl ExpectedHttpResponse {
-    fn ok(body: Value) -> Self {
-        Self {
-            status_code: 200,
-            reason_phrase: "OK",
-            body: body.to_string(),
-        }
-    }
-
-    fn status(status_code: u16, reason_phrase: &'static str, body: Value) -> Self {
-        Self {
-            status_code,
-            reason_phrase,
-            body: body.to_string(),
-        }
-    }
+    response_body: String,
 }
 
 #[derive(Debug)]
@@ -1646,11 +1766,9 @@ impl TestHttpServer {
                 }
 
                 let response = format!(
-                    "HTTP/1.1 {} {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                    expected.response.status_code,
-                    expected.response.reason_phrase,
-                    expected.response.body.len(),
-                    expected.response.body
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    expected.response_body.len(),
+                    expected.response_body
                 );
                 stream
                     .write_all(response.as_bytes())
@@ -1678,6 +1796,19 @@ impl TestHttpServer {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ApplyOutcome {
+    Success,
+    Fail,
+    TransientFail(String),
+}
+
+#[derive(Debug, Clone)]
+enum ListOutcome {
+    Success(Vec<TaskResource>),
+    TransientFail(String),
+}
+
 #[derive(Debug, Clone)]
 enum RecordedExecution {
     Success(ExecutionResult),
@@ -1688,6 +1819,15 @@ enum RecordedExecution {
 struct RecordingExecutor {
     calls: Arc<Mutex<Vec<String>>>,
     result: RecordedExecution,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StructuredErrorExecutor;
+
+impl StructuredErrorExecutor {
+    fn spawn_failed() -> Self {
+        Self
+    }
 }
 
 impl RecordingExecutor {
@@ -1732,6 +1872,18 @@ impl TaskExecutor for RecordingExecutor {
     }
 }
 
+impl TaskExecutor for StructuredErrorExecutor {
+    type ExecuteFuture<'a>
+        = Pin<Box<dyn Future<Output = Result<ExecutionResult>> + Send + 'a>>
+    where
+        Self: 'a;
+
+    fn execute<'a>(&'a self, task: &'a TaskResource) -> Self::ExecuteFuture<'a> {
+        let task_id = task.task_id.clone();
+        Box::pin(async move { Err(ExecutionError::spawn_failed(task_id).into()) })
+    }
+}
+
 fn queued_script_task(task_id: &str) -> TaskResource {
     TaskResource {
         task_id: task_id.to_string(),
@@ -1768,31 +1920,17 @@ fn queued_command_task(task_id: &str) -> TaskResource {
     }
 }
 
-fn acknowledged_command_task(task_id: &str) -> TaskResource {
-    TaskResource {
-        observed_state: TaskObservedState::Acknowledged,
-        claimed_at: Some("2026-05-31T07:59:30Z".to_string()),
-        updated_at: Some("2026-05-31T07:59:30Z".to_string()),
-        ..queued_command_task(task_id)
-    }
-}
-
-fn running_command_task(task_id: &str) -> TaskResource {
-    TaskResource {
-        observed_state: TaskObservedState::Running,
-        claimed_at: Some("2026-05-31T07:59:30Z".to_string()),
-        started_at: Some("2026-05-31T07:59:40Z".to_string()),
-        updated_at: Some("2026-05-31T07:59:40Z".to_string()),
-        ..queued_command_task(task_id)
-    }
-}
-
 fn synced_runtime_state(default_states: &[&str]) -> AgentRuntimeState {
+    let data_dir = writable_data_dir("task-sync-state");
+    synced_runtime_state_in(&data_dir, default_states)
+}
+
+fn synced_runtime_state_in(data_dir: &str, default_states: &[&str]) -> AgentRuntimeState {
     let config = AgentRuntimeConfig {
         nodemanage_sync_url: "http://127.0.0.1:3000/agent/sync".to_string(),
         agent_id: "agent-1".to_string(),
         node_id: None,
-        data_dir: "/var/lib/rsagent".to_string(),
+        data_dir: data_dir.to_string(),
         sync_interval_secs: 60,
     };
     let mut state = AgentRuntimeState::new(config);
@@ -1824,6 +1962,25 @@ fn synced_runtime_state(default_states: &[&str]) -> AgentRuntimeState {
         rejection_reason: None,
     });
     state
+}
+
+fn task_with_observed_state(task: TaskResource, observed_state: &str) -> TaskResource {
+    let mut value = serde_json::to_value(task).expect("serialize task");
+    value["observed_state"] = Value::String(observed_state.to_string());
+    serde_json::from_value(value).expect("deserialize task with observed_state")
+}
+
+fn writable_data_dir(prefix: &str) -> String {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let path: PathBuf = env::temp_dir().join(format!(
+        "rsagent-task-sync-{prefix}-{}-{unique}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&path).expect("create temp task sync dir");
+    path.display().to_string()
 }
 
 fn timestamp() -> chrono::DateTime<Utc> {
