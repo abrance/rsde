@@ -1,19 +1,16 @@
 use std::{env, fs, time::Duration};
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use rsagent::{
-    bootstrap::{
-        bootstrap_runtime_state, converge_runtime_mainline_after_sync, default_identity,
-        persist_durable_runtime_state,
-    },
+    bootstrap::{bootstrap_runtime_state, default_identity},
     clients::{
         nodemanage::ReqwestNodeManageSyncTransport,
         victoria_metrics::ReqwestVictoriaMetricsTransport,
     },
     config::AgentRuntimeConfig,
     config_sync::{diagnose_sync_transition, run_sync_once},
-    heartbeat::HeartbeatReporter,
-    runtime_coordinator::{evaluate_subordinate_loops, loop_intervals},
+    heartbeat::{reconcile_after_sync, HeartbeatReporter},
+    runtime_coordinator::{effects_from_sync_outcome, evaluate_subordinate_loops, loop_intervals},
     task_sync::TaskSyncLoop,
 };
 use tracing::{error, info, warn};
@@ -24,11 +21,11 @@ async fn main() -> Result<()> {
 
     let config = load_runtime_config()?;
     let identity = default_identity();
-    let agent_id = config.agent_id.clone();
     let default_sync_interval_secs = config.sync_interval_secs;
     let mut sync_transport = ReqwestNodeManageSyncTransport::default();
     let (mut state, identity) =
         bootstrap_runtime_state(config, identity, &mut sync_transport).await?;
+    let agent_id = state.agent_id().to_string();
 
     info!(agent_version = %identity.agent_version, agent_id = %agent_id, "rsagent starting");
 
@@ -52,16 +49,12 @@ async fn main() -> Result<()> {
         tokio::select! {
             _ = sync_interval.tick() => {
                 let now = chrono::Utc::now();
-                let was_degraded = state.is_degraded();
+                let previous_state = state.clone();
                 match run_sync_once(&mut state, &identity, &mut sync_transport).await {
                     Ok(outcome) => {
-                        let effects = converge_runtime_mainline_after_sync(&mut state, &outcome);
-                        if let Err(error) = persist_durable_runtime_state(&state) {
-                            error!(error = %error, "failed to persist runtime state after sync tick");
-                        }
-                        if effects.reset_heartbeat {
-                            heartbeat_reporter.reset();
-                        }
+                        let diagnostic = diagnose_sync_transition(&previous_state, &state, &outcome);
+                        let effects = effects_from_sync_outcome(&outcome);
+                        reconcile_after_sync(&mut heartbeat_reporter, &outcome, &state);
 
                         if effects.rebuild_sync_interval
                             || effects.rebuild_heartbeat_interval
@@ -79,11 +72,7 @@ async fn main() -> Result<()> {
                             }
                         }
 
-                        if let Some(diagnostic) = diagnose_sync_transition(was_degraded, &state, &outcome) {
-                            info!(?diagnostic, "config sync transition diagnostic");
-                        }
-
-                        info!(?outcome, degraded = state.is_degraded(), loops_enabled = state.loops_enabled(), sync_error = ?state.last_sync_error(), at = %now, "config sync tick completed");
+                        info!(?outcome, ?diagnostic, degraded = state.is_degraded(), loops_enabled = state.loops_enabled(), sync_error = ?state.last_sync_error(), at = %now, "config sync tick completed");
                     }
                     Err(error) => error!(error = %error, "config sync tick failed"),
                 }
@@ -98,18 +87,21 @@ async fn main() -> Result<()> {
                     continue;
                 }
 
-                match heartbeat_reporter.tick(chrono::Utc::now(), &state, &agent_id, &identity) {
-                    Ok(tick) => {
-                        if let Some(diagnostic) = heartbeat_reporter.take_diagnostic() {
-                            info!(?diagnostic, "heartbeat transition diagnostic");
-                        }
-                        info!(?tick, "heartbeat tick completed");
+                let reporter = std::mem::replace(
+                    &mut heartbeat_reporter,
+                    HeartbeatReporter::new(ReqwestVictoriaMetricsTransport::default()),
+                );
+                match reporter
+                    .tick_async(chrono::Utc::now(), state.clone(), agent_id.clone(), identity.clone())
+                    .await
+                {
+                    (reporter, Ok(tick)) => {
+                        heartbeat_reporter = reporter;
+                        info!(?tick, diagnostic = ?heartbeat_reporter.last_diagnostic(), "heartbeat tick completed")
                     }
-                    Err(error) => {
-                        if let Some(diagnostic) = heartbeat_reporter.take_diagnostic() {
-                            info!(?diagnostic, "heartbeat transition diagnostic");
-                        }
-                        error!(error = %error, "heartbeat tick failed");
+                    (reporter, Err(error)) => {
+                        heartbeat_reporter = reporter;
+                        error!(error = %error, "heartbeat tick failed")
                     }
                 }
             }
@@ -123,17 +115,19 @@ async fn main() -> Result<()> {
                     continue;
                 }
 
-                match loop_runner
-                    .tick(&state, &agent_id, chrono::Utc::now())
+                let task_runner = std::mem::replace(&mut loop_runner, TaskSyncLoop::production());
+                match task_runner
+                    .tick_async(state.clone(), agent_id.clone(), chrono::Utc::now())
                     .await
                 {
-                    Ok(tick) => {
-                        if let Some(diagnostic) = loop_runner.last_diagnostic() {
-                            info!(?diagnostic, "task sync lifecycle diagnostic");
-                        }
-                        info!(?tick, "task sync tick completed");
+                    (task_runner, Ok(tick)) => {
+                        loop_runner = task_runner;
+                        info!(?tick, diagnostic = ?loop_runner.last_tick_diagnostic(), "task sync tick completed")
                     }
-                    Err(error) => error!(error = %error, "task sync tick failed"),
+                    (task_runner, Err(error)) => {
+                        loop_runner = task_runner;
+                        error!(error = %error, "task sync tick failed")
+                    }
                 }
             }
         }
@@ -143,7 +137,7 @@ async fn main() -> Result<()> {
 }
 
 fn load_runtime_config() -> Result<AgentRuntimeConfig> {
-    let config_path = env::var("RSAGENT_CONFIG").ok();
+    let config_path = parse_config_path_from_args()?.or_else(|| env::var("RSAGENT_CONFIG").ok());
 
     match config_path {
         Some(path) => {
@@ -152,4 +146,19 @@ fn load_runtime_config() -> Result<AgentRuntimeConfig> {
         }
         None => Ok(AgentRuntimeConfig::default()),
     }
+}
+
+fn parse_config_path_from_args() -> Result<Option<String>> {
+    let mut args = env::args().skip(1);
+
+    while let Some(arg) = args.next() {
+        if arg == "--config" {
+            let path = args
+                .next()
+                .ok_or_else(|| anyhow!("missing value for --config"))?;
+            return Ok(Some(path));
+        }
+    }
+
+    Ok(None)
 }
