@@ -15,7 +15,7 @@ fn default_install_root() -> String {
 }
 
 fn default_register_callback_url() -> String {
-    "http://127.0.0.1:3000/agent/sync".to_string()
+    "http://127.0.0.1:3000/api/nm/v1/agents/sync".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -87,11 +87,21 @@ impl InstallRuntimeConfig {
 }
 
 fn normalize_sync_url(raw: &str) -> String {
-    raw.trim_end_matches("/")
-        .strip_suffix("/api/nodes/agent/register")
-        .or_else(|| raw.trim_end_matches("/").strip_suffix("/agent/sync"))
-        .unwrap_or(raw.trim_end_matches('/'))
-        .to_string()
+    let trimmed = raw.trim_end_matches('/');
+
+    if trimmed.ends_with("/api/nm/v1/agents/sync") {
+        return trimmed.to_string();
+    }
+
+    if let Some(base) = trimmed.strip_suffix("/api/nodes/agent/register") {
+        return format!("{base}/api/nm/v1/agents/sync");
+    }
+
+    if let Some(base) = trimmed.strip_suffix("/agent/sync") {
+        return format!("{base}/api/nm/v1/agents/sync");
+    }
+
+    trimmed.to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
