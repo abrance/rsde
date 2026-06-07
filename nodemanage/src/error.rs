@@ -99,6 +99,11 @@ impl NodeManageError {
                 message: self.to_string(),
                 retryable: false,
             },
+            Self::Conflict(_message) => NodeManageApiError {
+                code: NodeManageErrorCode::BindingConflict,
+                message: self.to_string(),
+                retryable: false,
+            },
             Self::TargetAgentNotFound(_message) => NodeManageApiError {
                 code: NodeManageErrorCode::TargetAgentNotFound,
                 message: self.to_string(),

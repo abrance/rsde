@@ -451,7 +451,9 @@ fn node_error(error: NodeManageError) -> (StatusCode, Json<NodeResponse>) {
         | NodeManageError::InstallTaskNotFound(_)
         | NodeManageError::BindingNotFound(_)
         | NodeManageError::TargetAgentNotFound(_) => StatusCode::NOT_FOUND,
-        NodeManageError::RebindTargetAlreadyBound(_) => StatusCode::CONFLICT,
+        NodeManageError::RebindTargetAlreadyBound(_) | NodeManageError::Conflict(_) => {
+            StatusCode::CONFLICT
+        }
         NodeManageError::InvalidRebindRequest(_) | NodeManageError::InvalidInput(_) => {
             StatusCode::BAD_REQUEST
         }
@@ -736,7 +738,9 @@ async fn sync_agent(
                 | NodeManageError::InstallTaskNotFound(_)
                 | NodeManageError::BindingNotFound(_)
                 | NodeManageError::TargetAgentNotFound(_) => StatusCode::NOT_FOUND,
-                NodeManageError::RebindTargetAlreadyBound(_) => StatusCode::CONFLICT,
+                NodeManageError::RebindTargetAlreadyBound(_) | NodeManageError::Conflict(_) => {
+                    StatusCode::CONFLICT
+                }
                 NodeManageError::InvalidRebindRequest(_) | NodeManageError::InvalidInput(_) => {
                     StatusCode::BAD_REQUEST
                 }
