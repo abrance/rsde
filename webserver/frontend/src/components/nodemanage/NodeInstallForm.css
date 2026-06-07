@@ -1,0 +1,25 @@
+.install-form-container {
+    margin-top: 1.5rem;
+    padding: 1.5rem;
+    background-color: white;
+    border: 1px solid var(--border-color, #eaeaea);
+    border-radius: 0.375rem;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+.install-form-container h3 {
+    margin-top: 0;
+    margin-bottom: 1rem;
+    font-size: 1.125rem;
+}
+
+.install-form-container form p {
+    margin-bottom: 1.5rem;
+    color: var(--text-muted, #666);
+}
+
+.form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+}
