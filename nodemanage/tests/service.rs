@@ -837,6 +837,7 @@ async fn sync_response_includes_runtime_and_polling_config_fields() {
             task_filter_defaults: TaskFilterDefaults {
                 states: vec![
                     "queued".to_string(),
+                    "dispatched".to_string(),
                     "acknowledged".to_string(),
                     "running".to_string(),
                 ],
