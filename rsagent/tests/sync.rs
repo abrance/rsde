@@ -1,17 +1,20 @@
 use std::{
+    fs,
     future::Future,
     io::{BufRead, BufReader, Read, Write},
     net::TcpListener,
     pin::Pin,
     sync::{Arc, Mutex},
     thread,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use rsagent::config::{AgentConfig, AgentRuntimeConfig};
 use rsagent::{
-    bootstrap::bootstrap_runtime_state,
+    bootstrap::{bootstrap_runtime_state, converge_runtime_mainline_after_sync},
     clients::nodemanage::{NodeManageSyncClient, NodeManageSyncTransport},
-    registration::{AgentIdentity, AgentRuntimeState},
+    config_sync::run_sync_once,
+    registration::{AgentIdentity, AgentRuntimeState, SubordinateLoopMode},
 };
 
 use anyhow::Result;
@@ -153,6 +156,41 @@ fn test_runtime_state_applies_active_sync_response() {
     assert_eq!(effective.heartbeat_config.interval_secs, 15);
 }
 
+#[test]
+fn test_runtime_state_restart_reuses_same_durable_agent_id_in_sync_request() {
+    let config = sample_runtime_config(Some("node-001"));
+    let identity = sample_identity();
+    let mut state = AgentRuntimeState::new(config.clone());
+    state.apply_sync_response(sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-001",
+        "cfg-001",
+        None,
+    ));
+
+    let restarted = AgentRuntimeState::new(config);
+    let request = restarted.build_sync_request(&identity);
+
+    assert_eq!(request.agent_id, "agt-001");
+    assert_eq!(request.node_id.as_deref(), Some("node-001"));
+}
+
+#[test]
+fn test_runtime_state_reinstall_can_present_new_agent_id_for_same_node_target() {
+    let config = AgentRuntimeConfig {
+        agent_id: "agt-002".to_string(),
+        node_id: Some("node-001".to_string()),
+        ..sample_runtime_config(None)
+    };
+    let state = AgentRuntimeState::new(config);
+    let request = state.build_sync_request(&sample_identity());
+
+    assert_eq!(request.agent_id, "agt-002");
+    assert_eq!(request.node_id.as_deref(), Some("node-001"));
+}
+
 #[tokio::test]
 async fn test_runtime_state_accepts_real_nodemanage_sync_response() {
     let config = sample_runtime_config(Some("node-real-sync"));
@@ -195,7 +233,28 @@ fn test_runtime_state_applies_idle_sync_response_and_disables_loops() {
     assert_eq!(state.local_node_id(), Some("node-001"));
     assert_eq!(state.config_version(), Some("cfg-002"));
     assert!(!state.loops_enabled());
+    assert_eq!(state.subordinate_loop_mode(), SubordinateLoopMode::Limited);
     assert!(!state.is_degraded());
+}
+
+#[test]
+fn test_runtime_state_untrusted_binding_withholds_loops_even_when_sync_is_accepted_and_active() {
+    let config = sample_runtime_config(None);
+    let mut state = AgentRuntimeState::new(config);
+
+    state.apply_sync_response(sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Conflict,
+        "node-control-plane",
+        "cfg-001",
+        None,
+    ));
+
+    assert_eq!(state.binding_state(), Some(&SyncBindingState::Conflict));
+    assert!(!state.loops_enabled());
+    assert_eq!(state.subordinate_loop_mode(), SubordinateLoopMode::Withheld);
+    assert_eq!(state.accepted_config_version(), Some("cfg-001"));
 }
 
 #[test]
@@ -222,10 +281,99 @@ fn test_runtime_state_conflict_rejection_keeps_existing_binding_and_disables_loo
 
     assert_eq!(state.local_node_id(), Some("node-existing"));
     assert_eq!(state.config_version(), Some("cfg-stable"));
+    assert_eq!(state.accepted_config_version(), Some("cfg-stable"));
     assert_eq!(state.binding_state(), Some(&SyncBindingState::Conflict));
     assert!(!state.loops_enabled());
-    assert!(!state.is_degraded());
+    assert_eq!(state.subordinate_loop_mode(), SubordinateLoopMode::Withheld);
+    assert!(state.is_degraded());
     assert_eq!(state.last_sync_error(), Some("binding conflict"));
+}
+
+#[test]
+fn test_runtime_state_rejected_sync_keeps_presented_identity_and_target_node() {
+    let config = AgentRuntimeConfig {
+        agent_id: "agt-new".to_string(),
+        node_id: Some("node-001".to_string()),
+        ..sample_runtime_config(None)
+    };
+    let mut state = AgentRuntimeState::new(config);
+
+    state.apply_sync_response(sample_response_with_agent_id(
+        false,
+        AgentRunMode::Idle,
+        SyncBindingState::Conflict,
+        "node-001",
+        "cfg-rejected",
+        Some("rebind required"),
+        "agt-old",
+    ));
+
+    let request = state.build_sync_request(&sample_identity());
+    assert_eq!(request.agent_id, "agt-new");
+    assert_eq!(request.node_id.as_deref(), Some("node-001"));
+    assert_eq!(state.local_node_id(), Some("node-001"));
+    assert_eq!(state.binding_state(), Some(&SyncBindingState::Conflict));
+    assert!(!state.loops_enabled());
+}
+
+#[test]
+fn test_runtime_state_requires_control_plane_agent_match_before_activating_loops() {
+    let config = AgentRuntimeConfig {
+        agent_id: "agt-local".to_string(),
+        node_id: Some("node-001".to_string()),
+        ..sample_runtime_config(None)
+    };
+    let mut state = AgentRuntimeState::new(config);
+
+    state.apply_sync_response(sample_response_with_agent_id(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-001",
+        "cfg-001",
+        None,
+        "agt-other",
+    ));
+
+    assert_eq!(state.binding_state(), Some(&SyncBindingState::Bound));
+    assert!(!state.loops_enabled());
+    assert_eq!(state.subordinate_loop_mode(), SubordinateLoopMode::Withheld);
+}
+
+#[test]
+fn test_runtime_state_rebind_converges_only_after_control_plane_accepts_presented_agent() {
+    let config = AgentRuntimeConfig {
+        agent_id: "agt-new".to_string(),
+        node_id: Some("node-001".to_string()),
+        ..sample_runtime_config(None)
+    };
+    let mut state = AgentRuntimeState::new(config);
+
+    state.apply_sync_response(sample_response_with_agent_id(
+        false,
+        AgentRunMode::Idle,
+        SyncBindingState::Conflict,
+        "node-001",
+        "cfg-conflict",
+        Some("rebind required"),
+        "agt-old",
+    ));
+    assert!(!state.loops_enabled());
+    assert_eq!(state.subordinate_loop_mode(), SubordinateLoopMode::Withheld);
+
+    state.apply_sync_response(sample_response_with_agent_id(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-001",
+        "cfg-rebound",
+        None,
+        "agt-new",
+    ));
+
+    assert_eq!(state.local_node_id(), Some("node-001"));
+    assert_eq!(state.config_version(), Some("cfg-rebound"));
+    assert!(state.loops_enabled());
 }
 
 #[test]
@@ -251,7 +399,7 @@ fn test_runtime_state_unbound_rejection_keeps_process_alive_without_loops() {
 }
 
 #[test]
-fn test_runtime_state_explicit_rejection_clears_temporary_degraded_state() {
+fn test_runtime_state_explicit_rejection_preserves_degraded_rejected_state() {
     let config = sample_runtime_config(Some("node-001"));
     let mut state = AgentRuntimeState::new(config);
     state.apply_sync_response(sample_response(
@@ -277,7 +425,7 @@ fn test_runtime_state_explicit_rejection_clears_temporary_degraded_state() {
     ));
 
     assert!(!state.loops_enabled());
-    assert!(!state.is_degraded());
+    assert!(state.is_degraded());
     assert_eq!(state.binding_state(), Some(&SyncBindingState::Conflict));
     assert_eq!(state.last_sync_error(), Some("binding conflict"));
     assert_eq!(state.config_version(), Some("cfg-healthy"));
@@ -331,6 +479,46 @@ fn test_runtime_state_replaces_effective_config_as_whole_snapshot() {
 }
 
 #[test]
+fn test_runtime_state_rejected_sync_does_not_replace_accepted_config_snapshot() {
+    let config = sample_runtime_config(Some("node-001"));
+    let mut state = AgentRuntimeState::new(config);
+    state.apply_sync_response(sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-001",
+        "cfg-v1",
+        None,
+    ));
+
+    let mut rejected = sample_response(
+        false,
+        AgentRunMode::Active,
+        SyncBindingState::Conflict,
+        "node-other",
+        "cfg-v2",
+        Some("binding conflict"),
+    );
+    rejected.heartbeat_config.data_link_id = "dl-rejected".to_string();
+    rejected.job_manage_config.base_url = "http://job-manage-rejected".to_string();
+    rejected.sync_interval_secs = 300;
+    rejected.task_sync_interval_secs = 600;
+
+    state.apply_sync_response(rejected);
+
+    assert_eq!(state.local_node_id(), Some("node-001"));
+    assert_eq!(state.accepted_config_version(), Some("cfg-v1"));
+    assert_eq!(state.subordinate_loop_mode(), SubordinateLoopMode::Withheld);
+
+    let effective = state.effective_config().unwrap();
+    assert_eq!(effective.config_version, "cfg-v1");
+    assert_eq!(effective.heartbeat_config.data_link_id, "dl-001");
+    assert_eq!(effective.job_manage_config.base_url, "http://job-manage");
+    assert_eq!(effective.sync_interval_secs, 10);
+    assert_eq!(effective.task_sync_interval_secs, 20);
+}
+
+#[test]
 fn test_runtime_state_temporary_sync_failure_keeps_last_good_config_and_marks_degraded() {
     let config = sample_runtime_config(Some("node-001"));
     let mut state = AgentRuntimeState::new(config);
@@ -369,7 +557,10 @@ fn test_runtime_state_temporary_sync_failure_without_last_good_config_keeps_loop
 
 #[tokio::test]
 async fn test_bootstrap_runtime_state_performs_initial_sync_and_enables_loops() {
-    let config = sample_runtime_config(None);
+    let config = AgentRuntimeConfig {
+        data_dir: unique_test_data_dir("bootstrap-initial-sync"),
+        ..sample_runtime_config(None)
+    };
     let identity = sample_identity();
     let response = sample_response(
         true,
@@ -399,11 +590,16 @@ async fn test_bootstrap_runtime_state_performs_initial_sync_and_enables_loops() 
     assert_eq!(requests[0].endpoint, config.nodemanage_sync_url);
     assert_eq!(requests[0].request.agent_id, config.agent_id);
     assert_eq!(requests[0].request.config_version, None);
+
+    fs::remove_dir_all(&config.data_dir).unwrap();
 }
 
 #[tokio::test]
 async fn test_bootstrap_runtime_state_populates_effective_config_and_node_binding() {
-    let config = sample_runtime_config(Some("node-existing"));
+    let config = AgentRuntimeConfig {
+        data_dir: unique_test_data_dir("bootstrap-populates-effective-config"),
+        ..sample_runtime_config(Some("node-existing"))
+    };
     let identity = sample_identity();
     let response = sample_response(
         true,
@@ -415,7 +611,7 @@ async fn test_bootstrap_runtime_state_populates_effective_config_and_node_bindin
     );
     let mut transport = RecordingNodeManageTransport::new(response);
 
-    let (state, _) = bootstrap_runtime_state(config, identity, &mut transport)
+    let (state, _) = bootstrap_runtime_state(config.clone(), identity, &mut transport)
         .await
         .unwrap();
 
@@ -427,6 +623,115 @@ async fn test_bootstrap_runtime_state_populates_effective_config_and_node_bindin
     assert_eq!(effective.heartbeat_config.interval_secs, 15);
     assert_eq!(effective.job_manage_config.base_url, "http://job-manage");
     assert_eq!(effective.sync_interval_secs, 10);
+
+    fs::remove_dir_all(&config.data_dir).unwrap();
+}
+
+#[tokio::test]
+async fn test_bootstrap_runtime_state_failed_initial_sync_keeps_inactive_runtime_state() {
+    let config = AgentRuntimeConfig {
+        data_dir: unique_test_data_dir("bootstrap-failed-sync"),
+        ..sample_runtime_config(None)
+    };
+    let identity = sample_identity();
+    let mut transport = FailingNodeManageTransport::new("bootstrap sync unavailable");
+
+    let (state, returned_identity) = bootstrap_runtime_state(config.clone(), identity.clone(), &mut transport)
+        .await
+        .unwrap();
+
+    assert_eq!(returned_identity, identity);
+    assert!(state.process_alive());
+    assert!(!state.loops_enabled());
+    assert!(!state.is_degraded());
+    assert!(state.effective_config().is_none());
+    assert_eq!(state.config_version(), None);
+    assert_eq!(state.local_node_id(), None);
+    assert_eq!(state.last_sync_error(), Some("bootstrap sync unavailable"));
+
+    fs::remove_dir_all(&config.data_dir).unwrap();
+}
+
+#[tokio::test]
+async fn test_bootstrap_runtime_state_restart_outage_recovers_from_durable_snapshot() {
+    let config = AgentRuntimeConfig {
+        node_id: None,
+        data_dir: unique_test_data_dir("restart-outage-recovery"),
+        ..sample_runtime_config(None)
+    };
+    let identity = sample_identity();
+    let mut previous = AgentRuntimeState::new(config.clone());
+    previous.apply_sync_response(sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-recovered",
+        "cfg-recovery",
+        None,
+    ));
+    rsagent::bootstrap::persist_durable_runtime_state(&previous).unwrap();
+
+    let mut transport = FailingNodeManageTransport::new("bootstrap sync unavailable");
+    let (state, returned_identity) = bootstrap_runtime_state(config.clone(), identity.clone(), &mut transport)
+        .await
+        .unwrap();
+
+    assert_eq!(returned_identity, identity);
+    assert_eq!(state.local_node_id(), Some("node-recovered"));
+    assert_eq!(state.config_version(), Some("cfg-recovery"));
+    assert!(state.loops_enabled());
+    assert!(state.is_degraded());
+    assert_eq!(state.last_sync_error(), Some("bootstrap sync unavailable"));
+    let effective = state.effective_config().unwrap();
+    assert_eq!(effective.config_version, "cfg-recovery");
+    assert_eq!(effective.task_sync_interval_secs, 20);
+
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].request.agent_id, config.agent_id);
+    assert_eq!(requests[0].request.node_id.as_deref(), Some("node-recovered"));
+    assert_eq!(requests[0].request.config_version.as_deref(), Some("cfg-recovery"));
+
+    fs::remove_dir_all(&config.data_dir).unwrap();
+}
+
+#[tokio::test]
+async fn test_bootstrap_runtime_state_healthy_sync_matches_shared_sync_mainline() {
+    let config = AgentRuntimeConfig {
+        data_dir: unique_test_data_dir("bootstrap-shared-mainline"),
+        ..sample_runtime_config(Some("node-restart"))
+    };
+    let identity = sample_identity();
+    let response = sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-restart",
+        "cfg-mainline",
+        None,
+    );
+    let mut bootstrap_transport = RecordingNodeManageTransport::new(response.clone());
+    let mut mainline_transport = RecordingNodeManageTransport::new(response);
+
+    let (bootstrapped_state, _) =
+        bootstrap_runtime_state(config.clone(), identity.clone(), &mut bootstrap_transport)
+            .await
+            .unwrap();
+
+    let mut mainline_state = AgentRuntimeState::new(config.clone());
+    let outcome = run_sync_once(&mut mainline_state, &identity, &mut mainline_transport)
+        .await
+        .unwrap();
+    let effects = converge_runtime_mainline_after_sync(&mut mainline_state, &outcome);
+
+    assert!(effects.reset_heartbeat);
+    assert!(effects.rebuild_sync_interval);
+    assert!(effects.rebuild_heartbeat_interval);
+    assert!(effects.rebuild_task_sync_interval);
+    assert_eq!(bootstrapped_state, mainline_state);
+    assert!(bootstrapped_state.loops_enabled());
+
+    fs::remove_dir_all(&config.data_dir).unwrap();
 }
 
 #[tokio::test]
@@ -481,6 +786,25 @@ struct RecordingNodeManageTransport {
     requests: Arc<Mutex<Vec<RecordedSyncRequest>>>,
 }
 
+#[derive(Debug, Clone)]
+struct FailingNodeManageTransport {
+    message: Arc<str>,
+    requests: Arc<Mutex<Vec<RecordedSyncRequest>>>,
+}
+
+impl FailingNodeManageTransport {
+    fn new(message: impl Into<Arc<str>>) -> Self {
+        Self {
+            message: message.into(),
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn requests(&self) -> Vec<RecordedSyncRequest> {
+        self.requests.lock().expect("sync requests lock").clone()
+    }
+}
+
 impl RecordingNodeManageTransport {
     fn new(response: AgentSyncResponse) -> Self {
         Self {
@@ -516,6 +840,39 @@ impl NodeManageSyncTransport for RecordingNodeManageTransport {
 
         Box::pin(async move { Ok(response) })
     }
+}
+
+impl NodeManageSyncTransport for FailingNodeManageTransport {
+    type SyncFuture<'a>
+        = Pin<Box<dyn Future<Output = Result<AgentSyncResponse>> + Send + 'a>>
+    where
+        Self: 'a;
+
+    fn sync<'a>(
+        &'a mut self,
+        endpoint: &'a str,
+        request: &'a nodemanage::AgentSyncRequest,
+    ) -> Self::SyncFuture<'a> {
+        self.requests
+            .lock()
+            .expect("sync requests lock")
+            .push(RecordedSyncRequest {
+                endpoint: endpoint.to_string(),
+                request: request.clone(),
+            });
+        let message = self.message.clone();
+        Box::pin(async move { Err(anyhow::anyhow!(message.to_string())) })
+    }
+}
+
+fn unique_test_data_dir(label: &str) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("rsagent-{label}-{nanos}"));
+    fs::create_dir_all(&dir).expect("create temp data dir");
+    dir.to_string_lossy().into_owned()
 }
 
 #[derive(Debug)]
@@ -629,9 +986,29 @@ fn sample_response(
     config_version: &str,
     rejection_reason: Option<&str>,
 ) -> AgentSyncResponse {
+    sample_response_with_agent_id(
+        accepted,
+        agent_run_mode,
+        binding_state,
+        bound_node_id,
+        config_version,
+        rejection_reason,
+        "agt-001",
+    )
+}
+
+fn sample_response_with_agent_id(
+    accepted: bool,
+    agent_run_mode: AgentRunMode,
+    binding_state: SyncBindingState,
+    bound_node_id: &str,
+    config_version: &str,
+    rejection_reason: Option<&str>,
+    agent_id: &str,
+) -> AgentSyncResponse {
     AgentSyncResponse {
         accepted,
-        agent_id: "agt-001".to_string(),
+        agent_id: agent_id.to_string(),
         bound_node_id: bound_node_id.to_string(),
         binding_state,
         agent_run_mode,

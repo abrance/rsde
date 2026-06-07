@@ -2,15 +2,18 @@ use std::{env, fs, time::Duration};
 
 use anyhow::Result;
 use rsagent::{
-    bootstrap::{bootstrap_runtime_state, default_identity},
+    bootstrap::{
+        bootstrap_runtime_state, converge_runtime_mainline_after_sync, default_identity,
+        persist_durable_runtime_state,
+    },
     clients::{
         nodemanage::ReqwestNodeManageSyncTransport,
         victoria_metrics::ReqwestVictoriaMetricsTransport,
     },
     config::AgentRuntimeConfig,
-    config_sync::run_sync_once,
+    config_sync::{diagnose_sync_transition, run_sync_once},
     heartbeat::HeartbeatReporter,
-    runtime_coordinator::{effects_from_sync_outcome, evaluate_subordinate_loops, loop_intervals},
+    runtime_coordinator::{evaluate_subordinate_loops, loop_intervals},
     task_sync::TaskSyncLoop,
 };
 use tracing::{error, info, warn};
@@ -49,9 +52,13 @@ async fn main() -> Result<()> {
         tokio::select! {
             _ = sync_interval.tick() => {
                 let now = chrono::Utc::now();
+                let was_degraded = state.is_degraded();
                 match run_sync_once(&mut state, &identity, &mut sync_transport).await {
                     Ok(outcome) => {
-                        let effects = effects_from_sync_outcome(&outcome);
+                        let effects = converge_runtime_mainline_after_sync(&mut state, &outcome);
+                        if let Err(error) = persist_durable_runtime_state(&state) {
+                            error!(error = %error, "failed to persist runtime state after sync tick");
+                        }
                         if effects.reset_heartbeat {
                             heartbeat_reporter.reset();
                         }
@@ -72,6 +79,10 @@ async fn main() -> Result<()> {
                             }
                         }
 
+                        if let Some(diagnostic) = diagnose_sync_transition(was_degraded, &state, &outcome) {
+                            info!(?diagnostic, "config sync transition diagnostic");
+                        }
+
                         info!(?outcome, degraded = state.is_degraded(), loops_enabled = state.loops_enabled(), sync_error = ?state.last_sync_error(), at = %now, "config sync tick completed");
                     }
                     Err(error) => error!(error = %error, "config sync tick failed"),
@@ -88,8 +99,18 @@ async fn main() -> Result<()> {
                 }
 
                 match heartbeat_reporter.tick(chrono::Utc::now(), &state, &agent_id, &identity) {
-                    Ok(tick) => info!(?tick, "heartbeat tick completed"),
-                    Err(error) => error!(error = %error, "heartbeat tick failed"),
+                    Ok(tick) => {
+                        if let Some(diagnostic) = heartbeat_reporter.take_diagnostic() {
+                            info!(?diagnostic, "heartbeat transition diagnostic");
+                        }
+                        info!(?tick, "heartbeat tick completed");
+                    }
+                    Err(error) => {
+                        if let Some(diagnostic) = heartbeat_reporter.take_diagnostic() {
+                            info!(?diagnostic, "heartbeat transition diagnostic");
+                        }
+                        error!(error = %error, "heartbeat tick failed");
+                    }
                 }
             }
             _ = task_sync_interval.tick() => {
@@ -106,7 +127,12 @@ async fn main() -> Result<()> {
                     .tick(&state, &agent_id, chrono::Utc::now())
                     .await
                 {
-                    Ok(tick) => info!(?tick, "task sync tick completed"),
+                    Ok(tick) => {
+                        if let Some(diagnostic) = loop_runner.last_diagnostic() {
+                            info!(?diagnostic, "task sync lifecycle diagnostic");
+                        }
+                        info!(?tick, "task sync tick completed");
+                    }
                     Err(error) => error!(error = %error, "task sync tick failed"),
                 }
             }
