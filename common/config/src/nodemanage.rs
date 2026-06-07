@@ -80,7 +80,7 @@ fn default_install_root() -> String {
 }
 
 fn default_register_callback_url() -> String {
-    "http://127.0.0.1:3000/api/nodes/agent/register".to_string()
+    "http://127.0.0.1:3000/api/nm/v1/agents/sync".to_string()
 }
 
 fn default_register_wait_timeout_secs() -> u64 {

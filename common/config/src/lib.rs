@@ -286,7 +286,7 @@ mod tests {
         assert_eq!(nodemanage.install_root, "/opt/rsagent");
         assert_eq!(
             nodemanage.register_callback_url,
-            "http://127.0.0.1:3000/api/nodes/agent/register"
+            "http://127.0.0.1:3000/api/nm/v1/agents/sync"
         );
         assert_eq!(nodemanage.install_plugins.len(), 2);
         assert_eq!(nodemanage.install_plugins[0].name, "metrics");
@@ -307,7 +307,7 @@ mod tests {
         assert_eq!(nodemanage.install_root, "/opt/rsagent");
         assert_eq!(
             nodemanage.register_callback_url,
-            "http://127.0.0.1:3000/api/nodes/agent/register"
+            "http://127.0.0.1:3000/api/nm/v1/agents/sync"
         );
         assert!(nodemanage.install_plugins.is_empty());
         assert_eq!(nodemanage.register_wait_timeout_secs, 30);
