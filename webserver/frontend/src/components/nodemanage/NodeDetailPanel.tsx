@@ -1,135 +1,166 @@
-import type { NodeDetail, NodeInstallTaskView, NodeBindingView } from '../../types/nodemanage';
-import NodeTaskTrackingCard from './NodeTaskTrackingCard';
+import { useEffect, useState, useCallback } from 'react';
+import type { NodeDetail, NodeBinding, InstallTask } from '../../types/nodemanage';
+import { fetchNodeDetail, fetchNodeBinding, fetchLatestInstallTask } from '../../data/nodemanage';
+import NodeInstallForm from './NodeInstallForm';
+import NodeRebindForm from './NodeRebindForm';
 import './NodeDetailPanel.css';
 
-interface NodeDetailPanelProps {
-    nodeId: string | null;
-    detail: NodeDetail | null;
-    isDetailLoading: boolean;
-    detailError: string | null;
-    latestTask: NodeInstallTaskView | null;
-    isTaskLoading: boolean;
-    taskError: string | null;
-    binding: NodeBindingView | null;
-    isBindingLoading: boolean;
-    bindingError: string | null;
-}
-
-export default function NodeDetailPanel({
+export default function NodeDetailPanel({ 
     nodeId,
-    detail,
-    isDetailLoading,
-    detailError,
-    latestTask,
-    isTaskLoading,
-    taskError,
-    binding,
-    isBindingLoading,
-    bindingError,
-}: NodeDetailPanelProps) {
-    if (!nodeId) {
+    onBack
+}: { 
+    nodeId: string;
+    onBack: () => void;
+}) {
+    const [detail, setDetail] = useState<NodeDetail | null>(null);
+    const [binding, setBinding] = useState<NodeBinding | null>(null);
+    const [latestTask, setLatestTask] = useState<InstallTask | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<Error | null>(null);
+    const [showInstallForm, setShowInstallForm] = useState(false);
+    const [showRebindForm, setShowRebindForm] = useState(false);
+
+    const loadData = useCallback(async (abortSignal?: AbortSignal) => {
+        setLoading(true);
+        setError(null);
+        try {
+            const [nodeData, bindingData, taskData] = await Promise.all([
+                fetchNodeDetail(nodeId),
+                fetchNodeBinding(nodeId),
+                fetchLatestInstallTask(nodeId)
+            ]);
+            
+            if (abortSignal?.aborted) return;
+            
+            setDetail(nodeData);
+            setBinding(bindingData);
+            setLatestTask(taskData);
+        } catch (err) {
+            if (abortSignal?.aborted) return;
+            setError(err instanceof Error ? err : new Error('Failed to load node detail'));
+        } finally {
+            if (!abortSignal?.aborted) {
+                setLoading(false);
+            }
+        }
+    }, [nodeId]);
+
+    useEffect(() => {
+        const controller = new AbortController();
+        loadData(controller.signal);
+        return () => controller.abort();
+    }, [loadData]);
+
+    const handleInstallSuccess = () => {
+        setShowInstallForm(false);
+        loadData();
+    };
+
+    const handleRebindSuccess = () => {
+        setShowRebindForm(false);
+        loadData();
+    };
+
+    if (loading) {
         return (
-            <aside className="node-detail-panel card" aria-label="Node Detail">
-                <div className="node-detail-section-heading">
-                    <h2>Node Detail</h2>
-                </div>
-                <p data-testid="detail-placeholder">Please select a node to view details.</p>
-            </aside>
+            <div className="node-detail card">
+                <p>加载详情中...</p>
+            </div>
         );
     }
 
-    const effectiveBinding = binding || detail?.binding;
-
-    return (
-        <aside className="node-detail-panel card" aria-label="Node Detail">
-            <div className="node-detail-section-heading">
-                <h2>Node Detail</h2>
-                <div className="node-detail-actions">
-                    <span data-testid="selected-node-id" className="node-detail-id-pill">
-                        {nodeId}
-                    </span>
+    if (error || !detail) {
+        return (
+            <div className="node-detail card error-state">
+                <h2>加载失败</h2>
+                <p>{error?.message}</p>
+                <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
+                    <button className="btn btn-secondary" onClick={onBack}>返回列表</button>
+                    <button className="btn btn-primary" onClick={() => loadData()}>重试</button>
                 </div>
             </div>
+        );
+    }
 
-            <div className="node-detail-content">
-                {isDetailLoading ? (
-                    <div data-testid="detail-loading" className="loading-state">Loading detail...</div>
-                ) : detailError ? (
-                    <div className="error-message" data-testid="detail-error">
-                        Error loading detail: {detailError}
+    const bindingState = binding?.state;
+    const stateStr = typeof bindingState === 'string' ? bindingState.toUpperCase() : 'UNBOUND';
+    const detailEndpoint = detail.endpoint;
+    const latestTaskStatus = latestTask?.status;
+    const latestTaskMessage = latestTask?.message;
+    const bindingStatusText = stateStr === 'BOUND' ? '已绑定' : 
+                              stateStr === 'BINDING' ? '绑定中' : 
+                              stateStr === 'ERROR' ? '异常' : '未绑定';
+
+    return (
+        <div className="node-detail card">
+            <header className="detail-header">
+                <h2>节点详情</h2>
+                <div className="detail-status">
+                    <span className={`status-badge status-${stateStr.toLowerCase()}`}>
+                        {bindingStatusText}
+                    </span>
+                </div>
+            </header>
+            
+            <div className="detail-info">
+                <div className="info-row">
+                    <span className="info-label">名称:</span>
+                    <span className="info-value">{detail.name}</span>
+                </div>
+                <div className="info-row">
+                    <span className="info-label">ID:</span>
+                    <span className="info-value">{detail.id}</span>
+                </div>
+                {typeof detailEndpoint === 'string' && detailEndpoint && (
+                    <div className="info-row">
+                        <span className="info-label">Endpoint:</span>
+                        <span className="info-value">{detailEndpoint}</span>
                     </div>
-                ) : detail ? (
-                    <div data-testid="detail-loaded">
-                        <div className="detail-group">
-                            <h3>基本信息 (Node)</h3>
-                            <dl className="detail-list">
-                                <dt>Node Name</dt>
-                                <dd data-testid="detail-node-name">{detail.node.node_name}</dd>
-                                <dt>Environment</dt>
-                                <dd data-testid="detail-node-env">{detail.node.environment}</dd>
-                                <dt>Labels</dt>
-                                <dd data-testid="detail-node-labels">{detail.node.labels.join(', ')}</dd>
-                                <dt>Updated At</dt>
-                                <dd data-testid="detail-node-updated">{detail.node.updated_at}</dd>
-                            </dl>
-                        </div>
-
-                        <div className="detail-group">
-                            <h3>状态信息 (Status)</h3>
-                            <dl className="detail-list">
-                                <dt>Lifecycle</dt>
-                                <dd data-testid="detail-status-lifecycle">{detail.status.lifecycle_state}</dd>
-                                <dt>Online Status</dt>
-                                <dd data-testid="detail-status-online">{detail.status.online_status}</dd>
-                                <dt>Binding State</dt>
-                                <dd data-testid="detail-status-binding">{detail.status.binding_state}</dd>
-                                <dt>Install Phase</dt>
-                                <dd>{detail.status.install_phase}</dd>
-                                <dt>Last Heartbeat</dt>
-                                <dd>{detail.status.last_heartbeat_at || 'Never'}</dd>
-                            </dl>
-                        </div>
-
-                        <div className="detail-group">
-                            <h3>绑定状态 (Binding)</h3>
-                            {isBindingLoading ? (
-                                <div data-testid="binding-loading" className="loading-state">Loading binding...</div>
-                            ) : bindingError ? (
-                                <div className="error-message" data-testid="binding-error">
-                                    Error loading binding: {bindingError}
-                                </div>
-                            ) : effectiveBinding ? (
-                                <dl className="detail-list">
-                                    <dt>Agent ID</dt>
-                                    <dd data-testid="detail-binding-agent">{effectiveBinding.agent_id}</dd>
-                                    <dt>State</dt>
-                                    <dd>{effectiveBinding.binding_state}</dd>
-                                </dl>
-                            ) : (
-                                <p data-testid="detail-binding-empty" className="detail-muted">暂无绑定</p>
-                            )}
-                        </div>
-
-                        <div className="detail-group">
-                            <h3>心跳引用 (Heartbeat Ref)</h3>
-                            {detail.heartbeat_ref ? (
-                                <dl className="detail-list">
-                                    <dt>DataLink ID</dt>
-                                    <dd data-testid="detail-heartbeat-link">{detail.heartbeat_ref.data_link_id}</dd>
-                                </dl>
-                            ) : (
-                                <p className="detail-muted">No heartbeat ref.</p>
-                            )}
-                        </div>
-                    </div>
-                ) : null}
-
-                <NodeTaskTrackingCard
-                    task={latestTask}
-                    isLoading={isTaskLoading}
-                    error={taskError}
-                />
+                )}
             </div>
-        </aside>
+
+            {latestTask && (
+                <div className="task-summary">
+                    <h3>最新安装任务</h3>
+                    <p>状态: {typeof latestTaskStatus === 'string' ? latestTaskStatus : 'UNKNOWN'}</p>
+                    {typeof latestTaskMessage === 'string' && latestTaskMessage && <p>信息: {latestTaskMessage}</p>}
+                </div>
+            )}
+
+            <div className="next-action">
+                <p>下一步操作：</p>
+                <button 
+                    className="btn btn-primary"
+                    onClick={() => setShowInstallForm(true)}
+                >
+                    安装 agent
+                </button>
+            </div>
+
+            <div className="secondary-actions">
+                <button 
+                    className="btn btn-text"
+                    onClick={() => setShowRebindForm(!showRebindForm)}
+                >
+                    需要重新绑定？
+                </button>
+            </div>
+
+            {showInstallForm && (
+                <NodeInstallForm 
+                    nodeId={nodeId} 
+                    onSuccess={handleInstallSuccess} 
+                    onCancel={() => setShowInstallForm(false)} 
+                />
+            )}
+
+            {showRebindForm && (
+                <NodeRebindForm 
+                    nodeId={nodeId} 
+                    onSuccess={handleRebindSuccess} 
+                    onCancel={() => setShowRebindForm(false)} 
+                />
+            )}
+        </div>
     );
 }

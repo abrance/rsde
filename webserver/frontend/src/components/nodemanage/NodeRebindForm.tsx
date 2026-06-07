@@ -1,93 +1,72 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
+import { rebindNode } from '../../data/nodemanage';
 import './NodeRebindForm.css';
-import { rebindNode } from '../../lib/nodemanage';
-import { StructuredApiError } from '../../types/api';
 
-interface NodeRebindFormProps {
-  nodeId: string;
-  onSuccess: () => void;
+export default function NodeRebindForm({
+    nodeId,
+    onSuccess,
+    onCancel
+}: {
+    nodeId: string;
+    onSuccess: () => void;
+    onCancel: () => void;
+}) {
+    const [agentId, setAgentId] = useState('');
+    const [reason, setReason] = useState('');
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!agentId.trim()) {
+            setError('目标 Agent ID 不能为空');
+            return;
+        }
+
+        setIsSubmitting(true);
+        setError(null);
+        try {
+            await rebindNode(nodeId, { targetAgentId: agentId, reason });
+            onSuccess();
+        } catch (err) {
+            setError(err instanceof Error ? err.message : '重新绑定失败');
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    return (
+        <div className="rebind-form-container">
+            <h3>重新绑定节点</h3>
+            <form onSubmit={handleSubmit}>
+                <div className="form-group">
+                    <label htmlFor="agentIdInput">目标 Agent ID</label>
+                    <input 
+                        id="agentIdInput"
+                        type="text" 
+                        value={agentId} 
+                        onChange={e => { setAgentId(e.target.value); setError(null); }}
+                        disabled={isSubmitting}
+                    />
+                </div>
+                <div className="form-group">
+                    <label htmlFor="reasonInput">原因 (可选)</label>
+                    <input 
+                        id="reasonInput"
+                        type="text" 
+                        value={reason} 
+                        onChange={e => setReason(e.target.value)}
+                        disabled={isSubmitting}
+                    />
+                </div>
+                {error && <p className="error-text">{error}</p>}
+                <div className="form-actions">
+                    <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={isSubmitting}>取消</button>
+                    <button type="submit" className="btn btn-warning" disabled={isSubmitting}>
+                        {isSubmitting ? '提交中...' : '确认重绑'}
+                    </button>
+                </div>
+            </form>
+        </div>
+    );
 }
-
-export const NodeRebindForm: React.FC<NodeRebindFormProps> = ({ nodeId, onSuccess }) => {
-  const [targetAgentId, setTargetAgentId] = useState('');
-  const [reason, setReason] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setSuccess(false);
-
-    const trimmedAgentId = targetAgentId.trim();
-    if (!trimmedAgentId) {
-      setError('Target Agent ID is required');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      await rebindNode(nodeId, {
-        target_agent_id: trimmedAgentId,
-        reason: reason.trim() || undefined,
-      });
-      setSuccess(true);
-      onSuccess();
-    } catch (err: unknown) {
-      const message =
-        err instanceof StructuredApiError
-          ? err.message
-          : err instanceof Error
-            ? err.message
-            : 'An unknown error occurred during rebind';
-      setError(message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="node-rebind-form card" data-testid="node-rebind-form">
-      <h3>Force Rebind</h3>
-      <p className="rebind-help">
-        Manually associate this node with a specific agent. Use only to recover from binding conflicts.
-      </p>
-
-      {error && <div className="rebind-error">{error}</div>}
-      {success && <div className="rebind-success">Rebind successful. Refreshing...</div>}
-
-      <form onSubmit={handleSubmit}>
-        <div className="form-group">
-          <label htmlFor="rebind-target-agent-id">Target Agent ID</label>
-          <input
-            id="rebind-target-agent-id"
-            type="text"
-            placeholder="agent-..."
-            value={targetAgentId}
-            onChange={(e) => setTargetAgentId(e.target.value)}
-            disabled={loading}
-          />
-        </div>
-
-        <div className="form-group">
-          <label htmlFor="rebind-reason">Reason (Optional)</label>
-          <input
-            id="rebind-reason"
-            type="text"
-            placeholder="Recovery from conflict..."
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            disabled={loading}
-          />
-        </div>
-
-        <div className="form-actions">
-          <button type="submit" disabled={loading} className="btn-danger">
-            {loading ? 'Submitting...' : 'Force Rebind'}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-};

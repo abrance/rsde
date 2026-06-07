@@ -1,4 +1,5 @@
 import { rcToolData } from "./rcToolsData"
+import { nodeManageMeta } from "./nodeManageMetaData"
 
 export interface ToolCardData {
     name: string
@@ -51,6 +52,17 @@ export const toolsData: ToolCardData[] = [
         ],
     },
     {
+        name: nodeManageMeta.name,
+        path: nodeManageMeta.path,
+        icon: nodeManageMeta.icon,
+        description: nodeManageMeta.description,
+        features: [
+            '节点纳管与注册',
+            '在线状态监控',
+            '环境初始化',
+        ],
+    },
+    {
         name: 'JobManage',
         path: '/job-manage',
         icon: '⚙️',
@@ -60,18 +72,6 @@ export const toolsData: ToolCardData[] = [
             '作业预检',
             '重试与取消',
             '过滤与检索',
-        ],
-    },
-    {
-        name: 'NodeManage',
-        path: '/node-manage',
-        icon: '🖥️',
-        description: '节点管理 (Agent Lifecycle) 工作台',
-        features: [
-            '节点列表与状态查看',
-            '节点详情追踪',
-            'Agent 绑定与解绑',
-            '安装任务下发',
         ],
     },
 ]

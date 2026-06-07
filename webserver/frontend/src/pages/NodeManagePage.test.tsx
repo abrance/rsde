@@ -1,851 +1,666 @@
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import NodeManagePage from './NodeManagePage'
-import * as nmApi from '../lib/nodemanage'
-import { StructuredApiError } from '../types/api'
-import { NodeSummary, NodeDetail, NodeInstallTaskView } from '../types/nodemanage'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { describe, expect, it, beforeEach, afterEach, vi, type Mock } from 'vitest'
+import App from '../App'
+import { fetchNodes, createNode, fetchNodeDetail, fetchNodeBinding, fetchLatestInstallTask, installNodeAgent, rebindNode, fetchNodeStatusBatch } from '../data/nodemanage'
+import NodeDetailPanel from '../components/nodemanage/NodeDetailPanel'
 
-vi.mock('../lib/nodemanage', () => ({
-  listNodes: vi.fn(),
-  getNode: vi.fn(),
-  getLatestInstallTask: vi.fn(),
-  getNodeBinding: vi.fn(),
-  installNode: vi.fn(),
-  rebindNode: vi.fn(),
-  getNodeStatusBatch: vi.fn(),
+vi.mock('../data/nodemanage', () => ({
+    fetchNodes: vi.fn(),
+    createNode: vi.fn(),
+    fetchNodeDetail: vi.fn(),
+    fetchNodeBinding: vi.fn(),
+    fetchLatestInstallTask: vi.fn(),
+    installNodeAgent: vi.fn(),
+    rebindNode: vi.fn(),
+    fetchNodeStatusBatch: vi.fn()
 }))
 
-const mockNodes: NodeSummary[] = [
-  {
-    node_id: 'node-1',
-    node_name: 'test-node-1',
-    environment: 'prod',
-    labels: ['db'],
-    lifecycle_state: 'ACTIVE',
-    install_phase: 'COMPLETED',
-    binding_state: 'BOUND',
-    online_status: 'ONLINE',
-    updated_at: '2026-01-01T00:00:00Z'
-  },
-  {
-    node_id: 'node-2',
-    node_name: 'test-node-2',
-    environment: 'dev',
-    labels: ['web'],
-    lifecycle_state: 'PENDING',
-    install_phase: 'PENDING',
-    binding_state: 'UNBOUND',
-    online_status: 'OFFLINE',
-    updated_at: '2026-01-01T00:00:00Z'
-  }
-]
-
-describe('NodeManagePage UI', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
-  it('renders summary cards based on list data', async () => {
-    vi.mocked(nmApi.listNodes).mockResolvedValue({
-      items: mockNodes,
-      total: 2,
-      page: 1,
-      page_size: 10,
-      total_pages: 1
-    })
-
-    render(
-      <MemoryRouter>
-        <NodeManagePage />
-      </MemoryRouter>
-    )
-
-    expect(nmApi.listNodes).toHaveBeenCalled()
-    
-    await waitFor(() => {
-      expect(screen.getByText('Total Nodes: 2')).toBeInTheDocument()
-      expect(screen.getByText('Online: 1')).toBeInTheDocument()
-      expect(screen.getByText('Bound: 1')).toBeInTheDocument()
-    })
-  })
-
-  it('renders list of nodes and supports client-side filtering', async () => {
-    vi.mocked(nmApi.listNodes).mockResolvedValue({
-      items: mockNodes,
-      total: 2,
-      page: 1,
-      page_size: 10,
-      total_pages: 1
-    })
-
-    render(
-      <MemoryRouter>
-        <NodeManagePage />
-      </MemoryRouter>
-    )
-
-    await waitFor(() => {
-      expect(screen.getByText('test-node-1')).toBeInTheDocument()
-      expect(screen.getByText('test-node-2')).toBeInTheDocument()
-    })
-
-    const filterInput = screen.getByPlaceholderText('Filter nodes...')
-    fireEvent.change(filterInput, { target: { value: 'node-1' } })
-
-    expect(screen.getByText('test-node-1')).toBeInTheDocument()
-    expect(screen.queryByText('test-node-2')).not.toBeInTheDocument()
-  })
-
-  it('handles row selection, triggers detail fetch with stale-request protection', async () => {
-    vi.mocked(nmApi.listNodes).mockResolvedValue({
-      items: mockNodes,
-      total: 2,
-      page: 1,
-      page_size: 10,
-      total_pages: 1
-    })
-
-    let resolveGetNode1: (val: NodeDetail) => void
-    let resolveGetNode2: (val: NodeDetail) => void
-    const getNodePromise1 = new Promise<NodeDetail>((resolve) => { resolveGetNode1 = resolve })
-    const getNodePromise2 = new Promise<NodeDetail>((resolve) => { resolveGetNode2 = resolve })
-
-    vi.mocked(nmApi.getNode).mockImplementation((nodeId) => {
-      if (nodeId === 'node-1') return getNodePromise1 as Promise<NodeDetail>
-      if (nodeId === 'node-2') return getNodePromise2 as Promise<NodeDetail>
-      return Promise.resolve({} as NodeDetail)
-    })
-
-    vi.mocked(nmApi.getLatestInstallTask).mockResolvedValue({
-      task_state: 'COMPLETED'
-    } as NodeInstallTaskView)
-
-    render(
-      <MemoryRouter>
-        <NodeManagePage />
-      </MemoryRouter>
-    )
-
-    await waitFor(() => {
-      expect(screen.getByText('test-node-1')).toBeInTheDocument()
-    })
-
-    fireEvent.click(screen.getByText('test-node-1'))
-    expect(nmApi.getNode).toHaveBeenCalledWith('node-1')
-    expect(nmApi.getLatestInstallTask).toHaveBeenCalledWith('node-1')
-
-    fireEvent.click(screen.getByText('test-node-2'))
-    expect(nmApi.getNode).toHaveBeenCalledWith('node-2')
-    expect(nmApi.getLatestInstallTask).toHaveBeenCalledWith('node-2')
-
-    const createMockDetail = (id: string) => ({
-      node: { node_id: id, node_name: `test-${id}`, environment: 'dev', labels: [], endpoint: '', created_at: '', updated_at: '' },
-      status: { lifecycle_state: 'ACTIVE', install_phase: 'COMPLETED', binding_state: 'BOUND', online_status: 'ONLINE' },
-      binding: undefined
-    })
-
-    resolveGetNode1!(createMockDetail('node-1'))
-    resolveGetNode2!(createMockDetail('node-2'))
-
-    await waitFor(() => {
-      expect(screen.getByTestId('selected-node-id')).toHaveTextContent('node-2')
-      expect(screen.getByTestId('detail-node-name')).toHaveTextContent('test-node-2')
-      expect(screen.getByTestId('task-tracking-state')).toHaveTextContent('COMPLETED')
-    })
-  })
-
-  it('renders user-visible error states for list loading failure', async () => {
-    vi.mocked(nmApi.listNodes).mockRejectedValue(new Error('Network error'))
-
-    render(
-      <MemoryRouter>
-        <NodeManagePage />
-      </MemoryRouter>
-    )
-
-    await waitFor(() => {
-      expect(screen.getByTestId('list-error')).toHaveTextContent('Failed to load node list: Network error')
-    })
-  })
-
-  it('renders user-visible error states for detail fetching failure', async () => {
-    vi.mocked(nmApi.listNodes).mockResolvedValue({
-      items: [mockNodes[0]],
-      total: 1,
-      page: 1,
-      page_size: 10,
-      total_pages: 1
-    })
-
-    vi.mocked(nmApi.getNode).mockRejectedValue(new Error('Detail fetch failed'))
-    vi.mocked(nmApi.getLatestInstallTask).mockRejectedValue(new Error('Task fetch failed'))
-
-    render(
-      <MemoryRouter>
-        <NodeManagePage />
-      </MemoryRouter>
-    )
-
-    await waitFor(() => {
-      expect(screen.getByText('test-node-1')).toBeInTheDocument()
-    })
-
-    fireEvent.click(screen.getByText('test-node-1'))
-
-    await waitFor(() => {
-      expect(screen.getByTestId('detail-error')).toHaveTextContent('Error loading detail: Detail fetch failed')
-      expect(screen.getByTestId('task-error')).toHaveTextContent('Error loading task: Task fetch failed')
-    })
-  })
-
-  it('renders explicit empty state when filter yields zero matches', async () => {
-    vi.mocked(nmApi.listNodes).mockResolvedValue({
-      items: mockNodes,
-      total: 2,
-      page: 1,
-      page_size: 10,
-      total_pages: 1
-    })
-
-    render(
-      <MemoryRouter>
-        <NodeManagePage />
-      </MemoryRouter>
-    )
-
-    await waitFor(() => {
-      expect(screen.getByText('test-node-1')).toBeInTheDocument()
-    })
-
-    const filterInput = screen.getByPlaceholderText('Filter nodes...')
-    fireEvent.change(filterInput, { target: { value: 'non-existent-node-123' } })
-
-    expect(screen.getByTestId('empty-filtered-state')).toHaveTextContent('No nodes match the filter.')
-    expect(screen.queryByText('test-node-1')).not.toBeInTheDocument()
-  })
-
-  it('renders empty task state (not error) when latest task is absent/null', async () => {
-    vi.mocked(nmApi.listNodes).mockResolvedValue({
-      items: [mockNodes[0]],
-      total: 1,
-      page: 1,
-      page_size: 10,
-      total_pages: 1
-    })
-
-    vi.mocked(nmApi.getNode).mockResolvedValue({
-      node: { node_id: 'node-1', node_name: 'test-node-1', environment: 'dev', labels: [], endpoint: '', created_at: '', updated_at: '' },
-      status: { lifecycle_state: 'ACTIVE', install_phase: 'COMPLETED', binding_state: 'BOUND', online_status: 'ONLINE' },
-      binding: undefined
-    } as NodeDetail)
-    
-    vi.mocked(nmApi.getLatestInstallTask).mockResolvedValue(null)
-
-    render(
-      <MemoryRouter>
-        <NodeManagePage />
-      </MemoryRouter>
-    )
-
-    await waitFor(() => {
-      expect(screen.getByText('test-node-1')).toBeInTheDocument()
-    })
-
-    fireEvent.click(screen.getByText('test-node-1'))
-
-    await waitFor(() => {
-      expect(screen.getByTestId('task-empty')).toHaveTextContent('No latest task found for this node.')
-    })
-  })
-
-  it('renders placeholder detail panel when no node is selected', async () => {
-    vi.mocked(nmApi.listNodes).mockResolvedValue({
-      items: mockNodes, total: 2, page: 1, page_size: 10, total_pages: 1
-    })
-    render(<MemoryRouter><NodeManagePage /></MemoryRouter>)
-    await waitFor(() => {
-      expect(screen.getByTestId('detail-placeholder')).toHaveTextContent('Please select a node to view details')
-    })
-  })
-
-  it('renders detail sections when node is selected', async () => {
-    vi.mocked(nmApi.listNodes).mockResolvedValue({ items: mockNodes, total: 2, page: 1, page_size: 10, total_pages: 1 })
-    vi.mocked(nmApi.getNode).mockResolvedValue({
-      node: { node_id: 'node-1', node_name: 'test-node-1', environment: 'prod', labels: ['db'], endpoint: '10.0.0.1', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
-      status: { lifecycle_state: 'ACTIVE', install_phase: 'COMPLETED', binding_state: 'BOUND', online_status: 'ONLINE', last_heartbeat_at: '2026-01-01T00:00:00Z' },
-      binding: { agent_id: 'agent-1', node_id: 'node-1', binding_state: 'BOUND', first_registered_at: '2026-01-01T00:00:00Z', last_handshake_at: '2026-01-01T00:00:00Z' },
-      heartbeat_ref: { data_link_id: 'link-1', link_purpose: 'HEARTBEAT', owner_service: 'rsagent', result_table_name: 'rt_node_heartbeats' }
-    })
-    vi.mocked(nmApi.getLatestInstallTask).mockResolvedValue({
-      task_state: 'COMPLETED'
-    } as NodeInstallTaskView)
-
-    render(<MemoryRouter><NodeManagePage /></MemoryRouter>)
-
-    await waitFor(() => expect(screen.getByText('test-node-1')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('test-node-1'))
-
-    await waitFor(() => {
-      expect(screen.getByTestId('detail-node-name')).toHaveTextContent('test-node-1')
-      expect(screen.getByTestId('detail-node-env')).toHaveTextContent('prod')
-      expect(screen.getByTestId('detail-node-labels')).toHaveTextContent('db')
-      
-      expect(screen.getByTestId('detail-status-lifecycle')).toHaveTextContent('ACTIVE')
-      expect(screen.getByTestId('detail-status-online')).toHaveTextContent('ONLINE')
-
-      expect(screen.getByTestId('detail-binding-agent')).toHaveTextContent('agent-1')
-
-      expect(screen.getByTestId('detail-heartbeat-link')).toHaveTextContent('link-1')
-
-      expect(screen.getByTestId('task-tracking-state')).toHaveTextContent('COMPLETED')
-    })
-  })
-
-  it('renders updated_at and status.binding_state even when binding is absent', async () => {
-    vi.mocked(nmApi.listNodes).mockResolvedValue({ items: mockNodes, total: 2, page: 1, page_size: 10, total_pages: 1 })
-    vi.mocked(nmApi.getNode).mockResolvedValue({
-      node: { node_id: 'node-1', node_name: 'test-node-1', environment: 'prod', labels: [], endpoint: '', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-06-07T00:00:00Z' },
-      status: { lifecycle_state: 'ACTIVE', install_phase: 'PENDING', binding_state: 'UNBOUND', online_status: 'OFFLINE' },
-      binding: undefined,
-    })
-    
-    vi.mocked(nmApi.getNodeBinding).mockRejectedValue({
-      code: 'BINDING_NOT_FOUND',
-      message: 'binding not found'
-    })
-    
-    vi.mocked(nmApi.getLatestInstallTask).mockResolvedValue(null)
-
-    render(<MemoryRouter><NodeManagePage /></MemoryRouter>)
-
-    await waitFor(() => expect(screen.getByText('test-node-1')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('test-node-1'))
-
-    await waitFor(() => {
-      expect(screen.getByTestId('detail-node-updated')).toHaveTextContent('2026-06-07T00:00:00Z')
-      expect(screen.getByTestId('detail-status-binding')).toHaveTextContent('UNBOUND')
-      expect(screen.getByTestId('detail-binding-empty')).toHaveTextContent('暂无绑定')
-      
-      expect(screen.queryByTestId('detail-node-endpoint')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('detail-binding-first-reg')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('detail-heartbeat-purpose')).not.toBeInTheDocument()
-    })
-  })
-
-  it('renders explicit generic error when dedicated binding fetch fails for reason other than BINDING_NOT_FOUND', async () => {
-    vi.mocked(nmApi.listNodes).mockResolvedValue({ items: mockNodes, total: 2, page: 1, page_size: 10, total_pages: 1 })
-    vi.mocked(nmApi.getNode).mockResolvedValue({
-      node: { node_id: 'node-1', node_name: 'test-node-1', environment: 'prod', labels: [], endpoint: '', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-06-07T00:00:00Z' },
-      status: { lifecycle_state: 'ACTIVE', install_phase: 'PENDING', binding_state: 'UNBOUND', online_status: 'OFFLINE' },
-    })
-    
-    vi.mocked(nmApi.getNodeBinding).mockRejectedValue(new Error('Generic Network Error'))
-    vi.mocked(nmApi.getLatestInstallTask).mockResolvedValue(null)
-
-    render(<MemoryRouter><NodeManagePage /></MemoryRouter>)
-
-    await waitFor(() => expect(screen.getByText('test-node-1')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('test-node-1'))
-
-    await waitFor(() => {
-      expect(screen.getByTestId('binding-error')).toHaveTextContent('Error loading binding: Generic Network Error')
-    })
-  })
-
-  it('renders binding data from dedicated binding read if it succeeds', async () => {
-    vi.mocked(nmApi.listNodes).mockResolvedValue({ items: mockNodes, total: 2, page: 1, page_size: 10, total_pages: 1 })
-    vi.mocked(nmApi.getNode).mockResolvedValue({
-      node: { node_id: 'node-1', node_name: 'test-node-1', environment: 'prod', labels: [], endpoint: '', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-06-07T00:00:00Z' },
-      status: { lifecycle_state: 'ACTIVE', install_phase: 'COMPLETED', binding_state: 'BOUND', online_status: 'ONLINE' },
-      binding: undefined
-    })
-    
-    vi.mocked(nmApi.getNodeBinding).mockResolvedValue({
-      agent_id: 'agent-99', node_id: 'node-1', binding_state: 'BOUND', first_registered_at: '2026-01-01', last_handshake_at: '2026-01-01'
-    })
-    
-    vi.mocked(nmApi.getLatestInstallTask).mockResolvedValue(null)
-
-    render(<MemoryRouter><NodeManagePage /></MemoryRouter>)
-
-    await waitFor(() => expect(screen.getByText('test-node-1')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('test-node-1'))
-
-    await waitFor(() => {
-      expect(screen.getByTestId('detail-binding-agent')).toHaveTextContent('agent-99')
-    })
-  })
-
-  describe('Node Install Form', () => {
-    const mockDetailNode: NodeDetail = {
-      node: {
-        node_id: mockNodes[0].node_id,
-        node_name: mockNodes[0].node_name,
-        environment: mockNodes[0].environment,
-        labels: mockNodes[0].labels,
-        endpoint: '127.0.0.1:22',
-        created_at: '2026-01-01T00:00:00Z',
-        updated_at: mockNodes[0].updated_at
-      },
-      status: { lifecycle_state: 'ACTIVE', install_phase: 'COMPLETED', binding_state: 'BOUND', online_status: 'ONLINE' },
-      binding: undefined
-    }
-
+describe('NodeManagePage Integration', () => {
     beforeEach(() => {
-      vi.mocked(nmApi.listNodes).mockResolvedValue({
-        items: [mockNodes[0]],
-        total: 1,
-        page: 1,
-        page_size: 10,
-        total_pages: 1
-      })
-      vi.mocked(nmApi.getNode).mockResolvedValue(mockDetailNode)
-      vi.mocked(nmApi.getLatestInstallTask).mockResolvedValue(null)
-      vi.mocked(nmApi.getNodeBinding).mockRejectedValue({ code: 'BINDING_NOT_FOUND', message: 'Not found' })
-      vi.mocked(nmApi.installNode).mockClear()
+        window.history.pushState({}, '', '/')
+        vi.clearAllMocks()
     })
 
-    it('renders install form when a node is selected', async () => {
-      render(<MemoryRouter><NodeManagePage /></MemoryRouter>)
-      await waitFor(() => expect(screen.getByText('test-node-1')).toBeInTheDocument())
-      fireEvent.click(screen.getByText('test-node-1'))
-      await waitFor(() => expect(screen.getByTestId('node-install-form')).toBeInTheDocument())
+    it('renders the NodeManage nav link inside layout', () => {
+        window.history.pushState({}, '', '/')
+        render(<App />)
+        expect(screen.getByRole('link', { name: 'NodeManage' })).toBeInTheDocument()
     })
 
-    it('validates required fields before submitting', async () => {
-      render(<MemoryRouter><NodeManagePage /></MemoryRouter>)
-      await waitFor(() => expect(screen.getByText('test-node-1')).toBeInTheDocument())
-      fireEvent.click(screen.getByText('test-node-1'))
-      await waitFor(() => expect(screen.getByTestId('node-install-form')).toBeInTheDocument())
-
-      const submitBtn = screen.getByRole('button', { name: /Submit Install/i })
-      fireEvent.click(submitBtn)
-
-      await waitFor(() => {
-        expect(screen.getByText(/Host is required/i)).toBeInTheDocument()
-        expect(screen.getByText(/Username is required/i)).toBeInTheDocument()
-        expect(screen.getByText(/Package URL is required/i)).toBeInTheDocument()
-        expect(screen.getByText(/Must provide either Password or Private Key/i)).toBeInTheDocument()
-      })
-      expect(nmApi.installNode).not.toHaveBeenCalled()
+    it('renders the NodeManage route heading via App routing', async () => {
+        ;(fetchNodes as Mock).mockResolvedValue({ nodes: [], total: 0 })
+        window.history.pushState({}, '', '/node-manage')
+        render(<App />)
+        expect(await screen.findByRole('heading', { name: '节点管理 (NodeManage)' })).toBeInTheDocument()
     })
 
-    it('submits install and shows receipt banner on success', async () => {
-      vi.mocked(nmApi.installNode).mockResolvedValue({
-        install_task_id: 'task-123',
-        node_id: 'node-1',
-        accepted: true,
-        task_state: 'PENDING'
-      })
+    it('renders the empty state with CTA and correct instruction copy', async () => {
+        ;(fetchNodes as Mock).mockResolvedValue({ nodes: [], total: 0 })
+        window.history.pushState({}, '', '/node-manage')
+        render(<App />)
+        expect(await screen.findByRole('button', { name: '纳管节点' })).toBeInTheDocument()
+        expect(screen.getByText(/纳管节点 → 安装 agent → 等待\/确认 binding → 节点可用于作业平台/)).toBeInTheDocument()
+    })
 
-      render(<MemoryRouter><NodeManagePage /></MemoryRouter>)
-      await waitFor(() => expect(screen.getByText('test-node-1')).toBeInTheDocument())
-      fireEvent.click(screen.getByText('test-node-1'))
-      await waitFor(() => expect(screen.getByTestId('node-install-form')).toBeInTheDocument())
+    it('renders the error state on fetch failure and allows retry', async () => {
+        ;(fetchNodes as Mock)
+            .mockRejectedValueOnce(new Error('Network disconnected'))
+            .mockResolvedValueOnce({ nodes: [], total: 0 })
+        
+        window.history.pushState({}, '', '/node-manage')
+        render(<App />)
+        
+        expect(await screen.findByText(/Network disconnected/)).toBeInTheDocument()
+        
+        const retryBtn = screen.getByRole('button', { name: '重试' })
+        expect(retryBtn).toBeInTheDocument()
+        
+        fireEvent.click(retryBtn)
+        
+        expect(await screen.findByRole('button', { name: '纳管节点' })).toBeInTheDocument()
+        expect(fetchNodes).toHaveBeenCalledTimes(2)
+    })
 
-      fireEvent.change(screen.getByLabelText(/Host/i), { target: { value: '10.0.0.1' } })
-      fireEvent.change(screen.getByLabelText(/Username/i), { target: { value: 'root' } })
-      fireEvent.change(screen.getByLabelText(/Password/i), { target: { value: 'secret' } })
-      fireEvent.change(screen.getByLabelText(/Package URL/i), { target: { value: 'http://pkg' } })
-
-      vi.mocked(nmApi.getNode).mockClear()
-      vi.mocked(nmApi.getLatestInstallTask).mockClear()
-
-      fireEvent.click(screen.getByRole('button', { name: /Submit Install/i }))
-
-      await waitFor(() => {
-        expect(nmApi.installNode).toHaveBeenCalledWith('node-1', {
-          host: '10.0.0.1',
-          username: 'root',
-          password: 'secret',
-          rsagent_package_url: 'http://pkg'
+    it('renders data-present state when nodes exist with correct table columns and rows', async () => {
+        ;(fetchNodes as Mock).mockResolvedValue({ 
+            nodes: [{
+                id: 'n1',
+                name: 'node-1',
+                endpoint: 'http://node-1:8080',
+                onlineStatus: 'online',
+                bindingState: 'BOUND',
+                updatedAt: '2026-06-07T12:00:00Z'
+            }], 
+            total: 1 
         })
-      })
+        window.history.pushState({}, '', '/node-manage')
+        render(<App />)
+        expect(await screen.findByRole('heading', { name: '节点列表' })).toBeInTheDocument()
+        expect(screen.getByText('共 1 个节点')).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: '纳管节点' })).toBeInTheDocument()
 
-      await waitFor(() => {
-        expect(screen.getByText(/Install request accepted/i)).toBeInTheDocument()
-        expect(screen.getByText(/task-123/i)).toBeInTheDocument()
-      })
+        // Check table headers
+        expect(screen.getByRole('columnheader', { name: '节点名称' })).toBeInTheDocument()
+        expect(screen.getByRole('columnheader', { name: '节点地址' })).toBeInTheDocument()
+        expect(screen.getByRole('columnheader', { name: '在线状态' })).toBeInTheDocument()
+        expect(screen.getByRole('columnheader', { name: '绑定状态' })).toBeInTheDocument()
+        expect(screen.getByRole('columnheader', { name: '最近更新时间' })).toBeInTheDocument()
+        expect(screen.getByRole('columnheader', { name: '操作' })).toBeInTheDocument()
 
-      expect(nmApi.getNode).toHaveBeenCalledWith('node-1')
-      expect(nmApi.getLatestInstallTask).toHaveBeenCalledWith('node-1')
+        // Check table row data
+        expect(screen.getByRole('cell', { name: 'node-1' })).toBeInTheDocument()
+        expect(screen.getByRole('cell', { name: 'http://node-1:8080' })).toBeInTheDocument()
+        expect(screen.getByRole('cell', { name: '在线' })).toBeInTheDocument() // mapping 'online' -> '在线'
+        expect(screen.getByRole('cell', { name: '已绑定' })).toBeInTheDocument() // mapping 'BOUND' -> '已绑定'
+        expect(screen.getByText(/2026-06-07/)).toBeInTheDocument() // The formatted date
+        expect(screen.getByRole('button', { name: '查看详情' })).toBeInTheDocument()
     })
-  })
-
-  describe('Node Rebind Form', () => {
-    const mockDetailNode: NodeDetail = {
-      node: {
-        node_id: mockNodes[0].node_id,
-        node_name: mockNodes[0].node_name,
-        environment: mockNodes[0].environment,
-        labels: mockNodes[0].labels,
-        endpoint: '127.0.0.1:22',
-        created_at: '2026-01-01T00:00:00Z',
-        updated_at: mockNodes[0].updated_at,
-      },
-      status: { lifecycle_state: 'ACTIVE', install_phase: 'COMPLETED', binding_state: 'BOUND', online_status: 'ONLINE' },
-      binding: undefined,
-    };
-
-    beforeEach(() => {
-      vi.mocked(nmApi.listNodes).mockResolvedValue({
-        items: [mockNodes[0]],
-        total: 1,
-        page: 1,
-        page_size: 10,
-        total_pages: 1
-      });
-      vi.mocked(nmApi.getNode).mockResolvedValue(mockDetailNode);
-      vi.mocked(nmApi.getLatestInstallTask).mockResolvedValue(null);
-      vi.mocked(nmApi.getNodeBinding).mockRejectedValue({ code: 'BINDING_NOT_FOUND', message: 'Not found' });
-      vi.mocked(nmApi.rebindNode).mockClear();
-    });
-
-    it('renders rebind form when a node is selected', async () => {
-      render(<MemoryRouter><NodeManagePage /></MemoryRouter>);
-      await waitFor(() => expect(screen.getByText('test-node-1')).toBeInTheDocument());
-      fireEvent.click(screen.getByText('test-node-1'));
-      await waitFor(() => expect(screen.getByTestId('node-rebind-form')).toBeInTheDocument());
-    });
-
-    it('blocks blank target_agent_id client-side', async () => {
-      render(<MemoryRouter><NodeManagePage /></MemoryRouter>);
-      await waitFor(() => expect(screen.getByText('test-node-1')).toBeInTheDocument());
-      fireEvent.click(screen.getByText('test-node-1'));
-      await waitFor(() => expect(screen.getByTestId('node-rebind-form')).toBeInTheDocument());
-
-      const submitBtn = screen.getByRole('button', { name: /Force Rebind/i });
-      fireEvent.click(submitBtn);
-
-      await waitFor(() => {
-        expect(screen.getByText(/Target Agent ID is required/i)).toBeInTheDocument();
-      });
-      expect(nmApi.rebindNode).not.toHaveBeenCalled();
-    });
-
-    it('displays TARGET_AGENT_NOT_FOUND error inline', async () => {
-      vi.mocked(nmApi.rebindNode).mockRejectedValue(
-        new StructuredApiError('Agent not found', 'TARGET_AGENT_NOT_FOUND')
-      );
-
-      render(<MemoryRouter><NodeManagePage /></MemoryRouter>);
-      await waitFor(() => expect(screen.getByText('test-node-1')).toBeInTheDocument());
-      fireEvent.click(screen.getByText('test-node-1'));
-      await waitFor(() => expect(screen.getByTestId('node-rebind-form')).toBeInTheDocument());
-
-      fireEvent.change(screen.getByLabelText(/Target Agent ID/i), { target: { value: 'missing-agent' } });
-      fireEvent.click(screen.getByRole('button', { name: /Force Rebind/i }));
-
-      await waitFor(() => {
-        expect(screen.getByText(/Agent not found/i)).toBeInTheDocument();
-      });
-    });
-
-    it('displays REBIND_TARGET_ALREADY_BOUND error inline', async () => {
-      vi.mocked(nmApi.rebindNode).mockRejectedValue(
-        new StructuredApiError('Target already bound to another node', 'REBIND_TARGET_ALREADY_BOUND')
-      );
-
-      render(<MemoryRouter><NodeManagePage /></MemoryRouter>);
-      await waitFor(() => expect(screen.getByText('test-node-1')).toBeInTheDocument());
-      fireEvent.click(screen.getByText('test-node-1'));
-      await waitFor(() => expect(screen.getByTestId('node-rebind-form')).toBeInTheDocument());
-
-      fireEvent.change(screen.getByLabelText(/Target Agent ID/i), { target: { value: 'busy-agent' } });
-      fireEvent.click(screen.getByRole('button', { name: /Force Rebind/i }));
-
-      await waitFor(() => {
-        expect(screen.getByText(/Target already bound to another node/i)).toBeInTheDocument();
-      });
-    });
-
-    it('resets rebind form state when switching to a different node', async () => {
-      vi.mocked(nmApi.listNodes).mockResolvedValue({
-        items: mockNodes,
-        total: 2,
-        page: 1,
-        page_size: 10,
-        total_pages: 1,
-      });
-      vi.mocked(nmApi.getNode).mockImplementation(async (nodeId) => ({
-        node: {
-          node_id: nodeId,
-          node_name: nodeId === 'node-1' ? 'test-node-1' : 'test-node-2',
-          environment: nodeId === 'node-1' ? 'prod' : 'dev',
-          labels: [],
-          endpoint: '127.0.0.1:22',
-          created_at: '2026-01-01T00:00:00Z',
-          updated_at: '2026-01-01T00:00:00Z',
-        },
-        status: { lifecycle_state: 'ACTIVE', install_phase: 'COMPLETED', binding_state: 'BOUND', online_status: 'ONLINE' },
-        binding: undefined,
-      }));
-      vi.mocked(nmApi.rebindNode).mockRejectedValue(
-        new StructuredApiError('Agent not found', 'TARGET_AGENT_NOT_FOUND')
-      );
-
-      render(<MemoryRouter><NodeManagePage /></MemoryRouter>);
-      await waitFor(() => expect(screen.getByText('test-node-1')).toBeInTheDocument());
-
-      fireEvent.click(screen.getByText('test-node-1'));
-      await waitFor(() => expect(screen.getByTestId('node-rebind-form')).toBeInTheDocument());
-
-      fireEvent.change(screen.getByLabelText(/Target Agent ID/i), { target: { value: 'stale-agent' } });
-      fireEvent.change(screen.getByLabelText(/Reason/i), { target: { value: 'stale reason' } });
-      fireEvent.click(screen.getByRole('button', { name: /Force Rebind/i }));
-
-      await waitFor(() => {
-        expect(screen.getByText(/Agent not found/i)).toBeInTheDocument();
-      });
-
-      fireEvent.click(screen.getByText('test-node-2'));
-
-      await waitFor(() => {
-        expect(screen.queryByText(/Agent not found/i)).not.toBeInTheDocument();
-        expect(screen.getByLabelText(/Target Agent ID/i)).toHaveValue('');
-        expect(screen.getByLabelText(/Reason/i)).toHaveValue('');
-      });
-    });
-
-    it('submits successfully, triggers rereads, and shows success banner', async () => {
-      vi.mocked(nmApi.rebindNode).mockResolvedValue({
-        accepted: true,
-        node_id: 'node-1',
-        target_agent_id: 'new-agent',
-        binding_state: 'BOUND'
-      });
-
-      render(<MemoryRouter><NodeManagePage /></MemoryRouter>);
-      await waitFor(() => expect(screen.getByText('test-node-1')).toBeInTheDocument());
-      fireEvent.click(screen.getByText('test-node-1'));
-      await waitFor(() => expect(screen.getByTestId('node-rebind-form')).toBeInTheDocument());
-
-      fireEvent.change(screen.getByLabelText(/Target Agent ID/i), { target: { value: 'new-agent' } });
-      fireEvent.change(screen.getByLabelText(/Reason/i), { target: { value: 'fix binding' } });
-
-      vi.mocked(nmApi.getNode).mockClear();
-      vi.mocked(nmApi.getLatestInstallTask).mockClear();
-      vi.mocked(nmApi.getNodeBinding).mockClear();
-      vi.mocked(nmApi.listNodes).mockClear();
-
-      fireEvent.click(screen.getByRole('button', { name: /Force Rebind/i }));
-
-      await waitFor(() => {
-        expect(nmApi.rebindNode).toHaveBeenCalledWith('node-1', {
-          target_agent_id: 'new-agent',
-          reason: 'fix binding'
-        });
-      });
-
-      await waitFor(() => {
-        expect(screen.getByText(/Rebind successful/i)).toBeInTheDocument();
-      });
-
-      expect(nmApi.getNode).toHaveBeenCalledWith('node-1');
-      expect(nmApi.getLatestInstallTask).toHaveBeenCalledWith('node-1');
-      expect(nmApi.getNodeBinding).toHaveBeenCalledWith('node-1');
-      expect(nmApi.listNodes).toHaveBeenCalled();
-    });
-  });
-
-  describe('List Polling with batch status API', () => {
-    beforeEach(() => {
-      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    
+    it('exposes the NodeManage tool card on the home page', async () => {
+        render(<App />)
+        const heading = screen.getByRole('heading', { name: 'NodeManage' })
+        const card = heading.closest('.tool-card')
+        expect(card).not.toBeNull()
     })
 
-    afterEach(() => {
-      vi.useRealTimers()
+    describe('Batch Status Polling', () => {
+        beforeEach(() => {
+            vi.useFakeTimers({ shouldAdvanceTime: true })
+        })
+
+        afterEach(() => {
+            vi.useRealTimers()
+        })
+        
+        it('requests batch status ONLY for visible node IDs derived from loaded list', async () => {
+            const mockNodes = Array.from({ length: 55 }).map((_, i) => ({
+                id: `n${i + 1}`,
+                name: `node-${i + 1}`,
+                onlineStatus: 'offline',
+                bindingState: 'UNBOUND'
+            }))
+            
+            ;(fetchNodes as Mock).mockResolvedValue({ 
+                nodes: mockNodes,
+                total: 55 
+            })
+            ;(fetchNodeStatusBatch as Mock).mockResolvedValue({
+                'n1': { id: 'n1', onlineStatus: 'online', bindingState: 'BOUND', updatedAt: '2026-06-07T13:00:00Z' }
+            })
+            
+            window.history.pushState({}, '', '/node-manage')
+            render(<App />)
+            
+            expect(await screen.findByRole('cell', { name: 'node-1' })).toBeInTheDocument()
+            
+            vi.useFakeTimers({ shouldAdvanceTime: true })
+            await act(async () => {
+                vi.advanceTimersByTime(10000)
+            })
+            vi.useRealTimers()
+            
+            const expectedPolledIds = mockNodes.slice(0, 50).map(n => n.id)
+            expect(fetchNodeStatusBatch).toHaveBeenCalledWith(expectedPolledIds)
+            
+            await waitFor(() => {
+                const n1Row = screen.getByRole('cell', { name: 'node-1' }).closest('tr')!
+                expect(n1Row).toHaveTextContent('在线')
+                expect(n1Row).toHaveTextContent('已绑定')
+                expect(n1Row).toHaveTextContent('2026-06-07')
+            })
+            
+            const n2Row = screen.getByRole('cell', { name: 'node-2' }).closest('tr')!
+            expect(n2Row).toHaveTextContent('离线')
+        })
+        
+        it('batch refresh failure preserves existing rows and shows non-fatal warning', async () => {
+            ;(fetchNodes as Mock).mockResolvedValue({ 
+                nodes: [{ id: 'n1', name: 'node-1', onlineStatus: 'offline' }], 
+                total: 1 
+            })
+            ;(fetchNodeStatusBatch as Mock).mockRejectedValue(new Error('Batch polling failed'))
+            
+            window.history.pushState({}, '', '/node-manage')
+            render(<App />)
+            
+            expect(await screen.findByRole('cell', { name: 'node-1' })).toBeInTheDocument()
+            
+            await act(async () => {
+                vi.advanceTimersByTime(10000)
+            })
+            
+            expect(fetchNodeStatusBatch).toHaveBeenCalled()
+            // Existing row is preserved
+            expect(screen.getByRole('cell', { name: 'node-1' })).toBeInTheDocument()
+            // Warning is shown
+            expect(await screen.findByText(/节点列表状态刷新失败: Batch polling failed/)).toBeInTheDocument()
+            
+            // On next successful poll, warning should be cleared
+            ;(fetchNodeStatusBatch as Mock).mockResolvedValue({
+                'n1': { id: 'n1', onlineStatus: 'online' }
+            })
+            
+            await act(async () => {
+                vi.advanceTimersByTime(10000)
+            })
+            
+            await waitFor(() => {
+                const n1Row = screen.getByRole('cell', { name: 'node-1' }).closest('tr')!
+                expect(n1Row).toHaveTextContent('在线')
+            })
+            
+            expect(screen.queryByText(/节点列表状态刷新失败: Batch polling failed/)).not.toBeInTheDocument()
+        })
+        
+        it('suppresses overlapping polls if the previous poll is still in flight', async () => {
+            ;(fetchNodes as Mock).mockResolvedValue({ 
+                nodes: [{ id: 'n1', name: 'node-1', onlineStatus: 'offline' }], 
+                total: 1 
+            })
+            
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            let resolveFirstPoll: (val: any) => void
+            const firstPollPromise = new Promise(resolve => {
+                resolveFirstPoll = resolve
+            })
+            
+            ;(fetchNodeStatusBatch as Mock).mockReturnValueOnce(firstPollPromise)
+            
+            window.history.pushState({}, '', '/node-manage')
+            render(<App />)
+            
+            expect(await screen.findByRole('cell', { name: 'node-1' })).toBeInTheDocument()
+            
+            // Advance time to trigger the first poll
+            await act(async () => {
+                vi.advanceTimersByTime(10000)
+            })
+            
+            expect(fetchNodeStatusBatch).toHaveBeenCalledTimes(1)
+            
+            // Advance time again, but first poll hasn't resolved
+            await act(async () => {
+                vi.advanceTimersByTime(10000)
+            })
+            
+            // Should NOT have called it a second time due to single-flight protection
+            expect(fetchNodeStatusBatch).toHaveBeenCalledTimes(1)
+            
+            // Resolve the first poll
+            await act(async () => {
+                resolveFirstPoll({
+                    'n1': { id: 'n1', onlineStatus: 'online' }
+                })
+                await firstPollPromise // Ensure tick
+            })
+            
+            await waitFor(() => {
+                const n1Row = screen.getByRole('cell', { name: 'node-1' }).closest('tr')!
+                expect(n1Row).toHaveTextContent('在线')
+            })
+        })
+        
+        it('does not poll when there are no nodes', async () => {
+            ;(fetchNodes as Mock).mockResolvedValue({ nodes: [], total: 0 })
+            
+            window.history.pushState({}, '', '/node-manage')
+            render(<App />)
+            
+            expect(await screen.findByRole('button', { name: '纳管节点' })).toBeInTheDocument()
+            
+            await act(async () => {
+                vi.advanceTimersByTime(10000)
+            })
+            
+            expect(fetchNodeStatusBatch).not.toHaveBeenCalled()
+        })
+        
+        it('cleans up polling interval on unmount', async () => {
+            ;(fetchNodes as Mock).mockResolvedValue({ 
+                nodes: [{ id: 'n1', name: 'node-1' }], 
+                total: 1 
+            })
+            
+            window.history.pushState({}, '', '/node-manage')
+            const { unmount } = render(<App />)
+            
+            expect(await screen.findByRole('cell', { name: 'node-1' })).toBeInTheDocument()
+            
+            unmount()
+            
+            await act(async () => {
+                vi.advanceTimersByTime(10000)
+            })
+            
+            expect(fetchNodeStatusBatch).not.toHaveBeenCalled()
+        })
     })
 
-    it('polls for batch status with active node ids and merges updates without wiping rows', async () => {
-      vi.mocked(nmApi.listNodes).mockResolvedValue({
-        items: mockNodes,
-        total: 2,
-        page: 1,
-        page_size: 10,
-        total_pages: 1
-      })
-      vi.mocked(nmApi.getNodeStatusBatch).mockResolvedValue([
-        { node_id: 'node-1', install_phase: 'COMPLETED', binding_state: 'BOUND', online_status: 'OFFLINE', updated_at: '2026-06-07T00:00:00Z', status_reason: 'Polled offline' }
-      ])
+    describe('Create Node Onboarding', () => {
+        it('empty-state CTA opens create entry', async () => {
+            ;(fetchNodes as Mock).mockResolvedValue({ nodes: [], total: 0 })
+            window.history.pushState({}, '', '/node-manage')
+            render(<App />)
+            
+            const ctaBtn = await screen.findByRole('button', { name: '纳管节点' })
+            fireEvent.click(ctaBtn)
+            
+            const dialog = screen.getByRole('dialog', { name: '纳管节点' })
+            expect(dialog).toBeInTheDocument()
+            expect(screen.getByRole('textbox', { name: /节点名称/i })).toBeInTheDocument()
+            expect(screen.getByRole('textbox', { name: /节点地址/i })).toBeInTheDocument()
+        })
 
-      render(<MemoryRouter><NodeManagePage /></MemoryRouter>)
+        it('non-empty state shows a top-level 纳管节点 action which opens create entry', async () => {
+            ;(fetchNodes as Mock).mockResolvedValue({ 
+                nodes: [{ id: 'n1', name: 'node-1' }], 
+                total: 1 
+            })
+            window.history.pushState({}, '', '/node-manage')
+            render(<App />)
+            
+            const createBtn = await screen.findByRole('button', { name: '纳管节点' })
+            expect(createBtn).toBeInTheDocument()
+            
+            fireEvent.click(createBtn)
+            expect(screen.getByRole('dialog', { name: '纳管节点' })).toBeInTheDocument()
+        })
 
-      await waitFor(() => {
-        expect(screen.getByText('Total Nodes: 2')).toBeInTheDocument()
-      })
+        it('non-empty state list view allows selecting an existing node to see details', async () => {
+            ;(fetchNodes as Mock).mockResolvedValue({ 
+                nodes: [{ id: 'n1', name: 'existing-node' }], 
+                total: 1 
+            })
+            ;(fetchNodeDetail as Mock).mockResolvedValue({ id: 'n1', name: 'existing-node' })
+            ;(fetchNodeBinding as Mock).mockResolvedValue({ state: 'UNBOUND' })
+            ;(fetchLatestInstallTask as Mock).mockResolvedValue(null)
+            
+            window.history.pushState({}, '', '/node-manage')
+            render(<App />)
+            
+            const detailBtn = await screen.findByRole('button', { name: '查看详情' })
+            expect(detailBtn).toBeInTheDocument()
+            
+            fireEvent.click(detailBtn)
+            
+            expect(await screen.findByRole('heading', { name: 'existing-node' })).toBeInTheDocument()
+            expect(screen.getByRole('button', { name: '安装 agent' })).toBeInTheDocument()
+        })
 
-      expect(nmApi.getNodeStatusBatch).not.toHaveBeenCalled()
+        it('non-empty state list view allows selecting an existing node via row click to see details', async () => {
+            ;(fetchNodes as Mock).mockResolvedValue({ 
+                nodes: [{ id: 'n1', name: 'existing-node-row-click' }], 
+                total: 1 
+            })
+            ;(fetchNodeDetail as Mock).mockResolvedValue({ id: 'n1', name: 'existing-node-row-click' })
+            ;(fetchNodeBinding as Mock).mockResolvedValue({ state: 'UNBOUND' })
+            ;(fetchLatestInstallTask as Mock).mockResolvedValue(null)
+            
+            window.history.pushState({}, '', '/node-manage')
+            render(<App />)
+            
+            const nameCell = await screen.findByRole('cell', { name: 'existing-node-row-click' })
+            fireEvent.click(nameCell)
+            
+            expect(await screen.findByRole('heading', { name: 'existing-node-row-click' })).toBeInTheDocument()
+            expect(screen.getByRole('button', { name: '安装 agent' })).toBeInTheDocument()
+        })
 
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(5000)
-      })
+        it('create validation failure is shown', async () => {
+            ;(fetchNodes as Mock).mockResolvedValue({ nodes: [], total: 0 })
+            window.history.pushState({}, '', '/node-manage')
+            render(<App />)
+            
+            const ctaBtn = await screen.findByRole('button', { name: '纳管节点' })
+            fireEvent.click(ctaBtn)
+            
+            const submitBtn = screen.getByRole('button', { name: '确认' })
+            fireEvent.click(submitBtn)
+            
+            expect(await screen.findByText(/节点名称不能为空/)).toBeInTheDocument()
+            expect(createNode).not.toHaveBeenCalled()
+        })
 
-      expect(nmApi.getNodeStatusBatch).toHaveBeenCalledWith(['node-1', 'node-2'])
+        it('create validation requires endpoint', async () => {
+            ;(fetchNodes as Mock).mockResolvedValue({ nodes: [], total: 0 })
+            window.history.pushState({}, '', '/node-manage')
+            render(<App />)
 
-      await waitFor(() => {
-        expect(screen.getByText('Online: 0')).toBeInTheDocument()
-      })
+            fireEvent.click(await screen.findByRole('button', { name: '纳管节点' }))
+
+            const nameInput = screen.getByRole('textbox', { name: /节点名称/i })
+            fireEvent.change(nameInput, { target: { value: 'new-node' } })
+
+            fireEvent.click(screen.getByRole('button', { name: '确认' }))
+
+            expect(await screen.findByText(/节点地址不能为空/)).toBeInTheDocument()
+            expect(createNode).not.toHaveBeenCalled()
+        })
+
+        it('successful create closes the dialog and transitions into selected-node detail state', async () => {
+            ;(fetchNodes as Mock)
+                .mockResolvedValueOnce({ nodes: [], total: 0 })
+                .mockResolvedValueOnce({ nodes: [{ id: 'n2', name: 'new-node' }], total: 1 })
+            ;(createNode as Mock).mockResolvedValue({ id: 'n2', name: 'new-node', endpoint: 'http://new-node:8080' })
+            ;(fetchNodeDetail as Mock).mockResolvedValue({ id: 'n2', name: 'new-node', endpoint: 'http://new-node:8080' })
+            ;(fetchNodeBinding as Mock).mockResolvedValue({ state: 'UNBOUND' })
+            ;(fetchLatestInstallTask as Mock).mockResolvedValue(null)
+            
+            window.history.pushState({}, '', '/node-manage')
+            render(<App />)
+            
+            const ctaBtn = await screen.findByRole('button', { name: '纳管节点' })
+            fireEvent.click(ctaBtn)
+            
+            const input = screen.getByRole('textbox', { name: /节点名称/i })
+            fireEvent.change(input, { target: { value: 'new-node' } })
+            const endpointInput = screen.getByRole('textbox', { name: /节点地址/i })
+            fireEvent.change(endpointInput, { target: { value: 'http://new-node:8080' } })
+            
+            const submitBtn = screen.getByRole('button', { name: '确认' })
+            fireEvent.click(submitBtn)
+            
+            await waitFor(() => {
+                expect(createNode).toHaveBeenCalledWith({ name: 'new-node', endpoint: 'http://new-node:8080' })
+            })
+            
+            await waitFor(() => {
+                expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+            })
+            
+            expect(await screen.findByRole('heading', { name: 'new-node' })).toBeInTheDocument()
+            expect(screen.getByRole('button', { name: '安装 agent' })).toBeInTheDocument()
+        })
+
+        it('shows error if create API fails', async () => {
+            ;(fetchNodes as Mock).mockResolvedValue({ nodes: [], total: 0 })
+            ;(createNode as Mock).mockRejectedValue(new Error('Backend validation failed'))
+            
+            window.history.pushState({}, '', '/node-manage')
+            render(<App />)
+            
+            fireEvent.click(await screen.findByRole('button', { name: '纳管节点' }))
+            
+            const input = screen.getByRole('textbox', { name: /节点名称/i })
+            fireEvent.change(input, { target: { value: 'fail-node' } })
+            const endpointInput = screen.getByRole('textbox', { name: /节点地址/i })
+            fireEvent.change(endpointInput, { target: { value: 'http://fail-node:8080' } })
+            
+            const submitBtn = screen.getByRole('button', { name: '确认' })
+            fireEvent.click(submitBtn)
+            
+            expect(await screen.findByText('Backend validation failed')).toBeInTheDocument()
+            expect(createNode).toHaveBeenCalledTimes(1)
+            expect(submitBtn).not.toBeDisabled()
+        })
+
+        it('prevents duplicate submission while create is in-flight', async () => {
+            ;(fetchNodes as Mock).mockResolvedValue({ nodes: [], total: 0 })
+            
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            let resolveCreate: any
+            const createPromise = new Promise(resolve => {
+                resolveCreate = resolve
+            })
+            ;(createNode as Mock).mockReturnValue(createPromise)
+            
+            window.history.pushState({}, '', '/node-manage')
+            render(<App />)
+            
+            fireEvent.click(await screen.findByRole('button', { name: '纳管节点' }))
+            
+            const input = screen.getByRole('textbox', { name: /节点名称/i })
+            fireEvent.change(input, { target: { value: 'dup-node' } })
+            const endpointInput = screen.getByRole('textbox', { name: /节点地址/i })
+            fireEvent.change(endpointInput, { target: { value: 'http://dup-node:8080' } })
+            
+            const submitBtn = screen.getByRole('button', { name: '确认' })
+            fireEvent.click(submitBtn)
+            fireEvent.click(submitBtn)
+            
+            expect(createNode).toHaveBeenCalledTimes(1)
+            expect(submitBtn).toBeDisabled()
+            
+            await act(async () => {
+                resolveCreate({ id: 'n2', name: 'dup-node' })
+                await createPromise
+            })
+        })
+
+        it('handles create success but refresh failure gracefully', async () => {
+            ;(fetchNodes as Mock)
+                .mockResolvedValueOnce({ nodes: [], total: 0 })
+                .mockRejectedValueOnce(new Error('Refresh failed'))
+            ;(createNode as Mock).mockResolvedValue({ id: 'n3', name: 'semi-node' })
+            ;(fetchNodeDetail as Mock).mockResolvedValue({ id: 'n3', name: 'semi-node' })
+            ;(fetchNodeBinding as Mock).mockResolvedValue({ state: 'UNBOUND' })
+            ;(fetchLatestInstallTask as Mock).mockResolvedValue(null)
+            
+            window.history.pushState({}, '', '/node-manage')
+            render(<App />)
+            
+            fireEvent.click(await screen.findByRole('button', { name: '纳管节点' }))
+            
+            const input = screen.getByRole('textbox', { name: /节点名称/i })
+            fireEvent.change(input, { target: { value: 'semi-node' } })
+            const endpointInput = screen.getByRole('textbox', { name: /节点地址/i })
+            fireEvent.change(endpointInput, { target: { value: 'http://semi-node:8080' } })
+            
+            fireEvent.click(screen.getByRole('button', { name: '确认' }))
+            
+            await waitFor(() => {
+                expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+            })
+            
+            expect(await screen.findByRole('heading', { name: 'semi-node' })).toBeInTheDocument()
+            
+            fireEvent.click(screen.getByRole('button', { name: '← 返回列表' }))
+            expect(await screen.findByText(/节点列表刷新失败: Refresh failed/)).toBeInTheDocument()
+        })
+
+        it('clears modal state when closed and reopened', async () => {
+            ;(fetchNodes as Mock).mockResolvedValue({ nodes: [], total: 0 })
+            
+            window.history.pushState({}, '', '/node-manage')
+            render(<App />)
+            
+            fireEvent.click(await screen.findByRole('button', { name: '纳管节点' }))
+            
+            const input = screen.getByRole('textbox', { name: /节点名称/i }) as HTMLInputElement
+            fireEvent.change(input, { target: { value: 'test-node' } })
+            expect(input.value).toBe('test-node')
+            const endpointInput = screen.getByRole('textbox', { name: /节点地址/i }) as HTMLInputElement
+            fireEvent.change(endpointInput, { target: { value: 'http://test-node:8080' } })
+            expect(endpointInput.value).toBe('http://test-node:8080')
+            
+            fireEvent.click(screen.getByRole('button', { name: '取消' }))
+            
+            fireEvent.click(await screen.findByRole('button', { name: '纳管节点' }))
+            
+            const reopenedInput = screen.getByRole('textbox', { name: /节点名称/i }) as HTMLInputElement
+            expect(reopenedInput.value).toBe('')
+            const reopenedEndpointInput = screen.getByRole('textbox', { name: /节点地址/i }) as HTMLInputElement
+            expect(reopenedEndpointInput.value).toBe('')
+        })
     })
 
-    it('shows StructuredApiError batch refresh failures non-blockingly without wiping rows', async () => {
-      vi.mocked(nmApi.listNodes).mockResolvedValue({
-        items: mockNodes,
-        total: 2,
-        page: 1,
-        page_size: 10,
-        total_pages: 1
-      })
-      vi.mocked(nmApi.getNodeStatusBatch).mockRejectedValue(
-        new StructuredApiError('Batch refresh failed', 'INTERNAL_ERROR')
-      )
+    describe('NodeDetailPanel Isolated', () => {
+        const mockOnBack = vi.fn()
+        
+        beforeEach(() => {
+            ;(fetchNodeDetail as Mock).mockResolvedValue({ id: 'n1', name: 'node-1' })
+            ;(fetchNodeBinding as Mock).mockResolvedValue({ state: 'UNBOUND' })
+            ;(fetchLatestInstallTask as Mock).mockResolvedValue(null)
+            ;(installNodeAgent as Mock).mockResolvedValue({ id: 't1', status: 'RUNNING' })
+            ;(rebindNode as Mock).mockResolvedValue({})
+        })
 
-      render(<MemoryRouter><NodeManagePage /></MemoryRouter>)
+        it('handles detail load failure gracefully and allows retry', async () => {
+            ;(fetchNodeDetail as Mock)
+                .mockRejectedValueOnce(new Error('Detail component load error'))
+                .mockResolvedValueOnce({ id: 'n1', name: 'node-1' })
+            
+            render(<NodeDetailPanel nodeId="n1" onBack={mockOnBack} />)
+            
+            expect(await screen.findByText('Detail component load error')).toBeInTheDocument()
+            expect(screen.getByRole('button', { name: '返回列表' })).toBeInTheDocument()
+            
+            const retryBtn = screen.getByRole('button', { name: '重试' })
+            expect(retryBtn).toBeInTheDocument()
+            
+            fireEvent.click(retryBtn)
+            
+            expect(await screen.findByText('node-1')).toBeInTheDocument()
+            expect(fetchNodeDetail).toHaveBeenCalledTimes(2)
+        })
 
-      await waitFor(() => {
-        expect(screen.getByText('Total Nodes: 2')).toBeInTheDocument()
-      })
+        it('handles install failure correctly', async () => {
+            render(<NodeDetailPanel nodeId="n1" onBack={mockOnBack} />)
+            expect(await screen.findByText('node-1')).toBeInTheDocument()
+            
+            fireEvent.click(screen.getByRole('button', { name: '安装 agent' }))
+            
+            ;(installNodeAgent as Mock).mockRejectedValueOnce(new Error('Failed to create install task'))
+            fireEvent.click(screen.getByRole('button', { name: '确认安装' }))
+            
+            expect(await screen.findByText('Failed to create install task')).toBeInTheDocument()
+            expect(fetchLatestInstallTask).toHaveBeenCalledTimes(1)
+        })
 
-      await waitFor(() => {
-        expect(screen.getByText('test-node-1')).toBeInTheDocument()
-        expect(screen.getByText('test-node-2')).toBeInTheDocument()
-      })
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(5000)
-      })
-
-      await waitFor(() => {
-        expect(screen.getByText('Total Nodes: 2')).toBeInTheDocument()
-        expect(screen.getByTestId('batch-error')).toHaveTextContent('Batch refresh failed')
-        expect(screen.getByText('test-node-1')).toBeInTheDocument()
-        expect(screen.getByText('test-node-2')).toBeInTheDocument()
-      })
+        it('handles rebind failure correctly', async () => {
+            render(<NodeDetailPanel nodeId="n1" onBack={mockOnBack} />)
+            expect(await screen.findByText('node-1')).toBeInTheDocument()
+            
+            fireEvent.click(screen.getByRole('button', { name: '需要重新绑定？' }))
+            
+            const rebindInput = screen.getByLabelText('目标 Agent ID')
+            fireEvent.change(rebindInput, { target: { value: 'agent-bad' } })
+            
+            ;(rebindNode as Mock).mockRejectedValueOnce(new Error('Agent ID invalid'))
+            fireEvent.click(screen.getByRole('button', { name: '确认重绑' }))
+            
+            expect(await screen.findByText('Agent ID invalid')).toBeInTheDocument()
+            expect(fetchNodeBinding).toHaveBeenCalledTimes(1)
+        })
     })
 
-    it('continues polling with the same active node ids across repeated status-only updates', async () => {
-      vi.mocked(nmApi.listNodes).mockResolvedValue({
-        items: mockNodes,
-        total: 2,
-        page: 1,
-        page_size: 10,
-        total_pages: 1,
-      })
-      vi.mocked(nmApi.getNodeStatusBatch)
-        .mockResolvedValueOnce([
-          {
-            node_id: 'node-1',
-            install_phase: 'COMPLETED',
-            binding_state: 'BOUND',
-            online_status: 'OFFLINE',
-            updated_at: '2026-06-07T00:00:00Z',
-            status_reason: 'Polled offline',
-          },
-        ])
-        .mockResolvedValueOnce([
-          {
-            node_id: 'node-1',
-            install_phase: 'COMPLETED',
-            binding_state: 'BOUND',
-            online_status: 'ONLINE',
-            updated_at: '2026-06-07T00:00:05Z',
-            status_reason: 'Polled back online',
-          },
-        ])
+    describe('Detail Panel & Actions', () => {
+        beforeEach(() => {
+            ;(fetchNodes as Mock).mockResolvedValue({ 
+                nodes: [{ id: 'n1', name: 'node-1' }], 
+                total: 1 
+            })
+            ;(fetchNodeDetail as Mock).mockResolvedValue({ id: 'n1', name: 'node-1' })
+            ;(fetchNodeBinding as Mock).mockResolvedValue({ state: 'UNBOUND' })
+            ;(fetchLatestInstallTask as Mock).mockResolvedValue(null)
+            ;(installNodeAgent as Mock).mockResolvedValue({ id: 't1', status: 'RUNNING' })
+            ;(rebindNode as Mock).mockResolvedValue({})
+        })
 
-      render(<MemoryRouter><NodeManagePage /></MemoryRouter>)
+        const renderAndSelectNode = async () => {
+            ;(fetchNodes as Mock)
+                .mockResolvedValueOnce({ nodes: [], total: 0 })
+                .mockResolvedValueOnce({ nodes: [{ id: 'n1', name: 'node-1' }], total: 1 })
+            ;(createNode as Mock).mockResolvedValue({ id: 'n1', name: 'node-1', endpoint: 'http://node-1:8080' })
 
-      await waitFor(() => {
-        expect(screen.getByText('Total Nodes: 2')).toBeInTheDocument()
-      })
+            window.history.pushState({}, '', '/node-manage')
+            render(<App />)
+            
+            const ctaBtn = await screen.findByRole('button', { name: '纳管节点' })
+            fireEvent.click(ctaBtn)
+            const input = screen.getByRole('textbox', { name: /节点名称/i })
+            fireEvent.change(input, { target: { value: 'node-1' } })
+            const endpointInput = screen.getByRole('textbox', { name: /节点地址/i })
+            fireEvent.change(endpointInput, { target: { value: 'http://node-1:8080' } })
+            fireEvent.click(screen.getByRole('button', { name: '确认' }))
+            
+            await screen.findByRole('button', { name: '安装 agent' })
+        }
 
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(5000)
-      })
+        it('detail view shows correct binding language and install CTA', async () => {
+            await renderAndSelectNode()
+            expect(screen.getByText('未绑定')).toBeInTheDocument()
+            expect(screen.getByRole('button', { name: '安装 agent' })).toBeInTheDocument()
+        })
 
-      await waitFor(() => {
-        expect(screen.getByText('Online: 0')).toBeInTheDocument()
-      })
+        it('install CTA opens install form for selected node and triggers reread', async () => {
+            await renderAndSelectNode()
+            const installBtn = screen.getByRole('button', { name: '安装 agent' })
+            fireEvent.click(installBtn)
+            
+            const confirmBtn = screen.getByRole('button', { name: '确认安装' })
+            expect(confirmBtn).toBeInTheDocument()
 
-      expect(nmApi.getNodeStatusBatch).toHaveBeenNthCalledWith(1, ['node-1', 'node-2'])
+            ;(fetchLatestInstallTask as Mock).mockResolvedValueOnce({ id: 't1', status: 'RUNNING' })
+            
+            fireEvent.click(confirmBtn)
+            
+            await waitFor(() => {
+                expect(installNodeAgent).toHaveBeenCalledWith('n1')
+                expect(fetchLatestInstallTask).toHaveBeenCalled()
+            })
+        })
 
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(5000)
-      })
+        it('rebind is present as a secondary repair path and triggers rebind action', async () => {
+            await renderAndSelectNode()
+            const rebindToggleBtn = screen.getByRole('button', { name: '需要重新绑定？' })
+            fireEvent.click(rebindToggleBtn)
 
-      await waitFor(() => {
-        expect(screen.getByText('Online: 1')).toBeInTheDocument()
-      })
+            const rebindInput = screen.getByLabelText('目标 Agent ID')
+            fireEvent.change(rebindInput, { target: { value: 'agent-123' } })
 
-      expect(nmApi.getNodeStatusBatch).toHaveBeenNthCalledWith(2, ['node-1', 'node-2'])
+            const confirmRebindBtn = screen.getByRole('button', { name: '确认重绑' })
+            
+            ;(fetchNodeBinding as Mock).mockResolvedValueOnce({ state: 'BOUND', agentId: 'agent-123' })
+            
+            fireEvent.click(confirmRebindBtn)
+
+            await waitFor(() => {
+                expect(rebindNode).toHaveBeenCalledWith('n1', { targetAgentId: 'agent-123', reason: '' })
+                expect(fetchNodeBinding).toHaveBeenCalled()
+            })
+            
+            expect(await screen.findByText('已绑定')).toBeInTheDocument()
+        })
     })
-
-    it('does not start a second batch poll while a previous poll is still in flight', async () => {
-      vi.mocked(nmApi.listNodes).mockResolvedValue({
-        items: mockNodes,
-        total: 2,
-        page: 1,
-        page_size: 10,
-        total_pages: 1,
-      })
-
-      let resolveFirstPoll: ((value: Parameters<typeof Promise.resolve>[0]) => void) | undefined
-      const firstPollPromise = new Promise((resolve) => {
-        resolveFirstPoll = resolve
-      })
-
-      vi.mocked(nmApi.getNodeStatusBatch)
-        .mockReturnValueOnce(firstPollPromise as Promise<any>)
-        .mockResolvedValueOnce([
-          {
-            node_id: 'node-1',
-            install_phase: 'COMPLETED',
-            binding_state: 'BOUND',
-            online_status: 'OFFLINE',
-            updated_at: '2026-06-07T00:00:05Z',
-            status_reason: 'Recovered after first poll',
-          },
-        ])
-
-      render(<MemoryRouter><NodeManagePage /></MemoryRouter>)
-
-      await waitFor(() => {
-        expect(screen.getByText('Total Nodes: 2')).toBeInTheDocument()
-      })
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(5000)
-      })
-
-      expect(nmApi.getNodeStatusBatch).toHaveBeenCalledTimes(1)
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(5000)
-      })
-
-      expect(nmApi.getNodeStatusBatch).toHaveBeenCalledTimes(1)
-
-      resolveFirstPoll?.([
-        {
-          node_id: 'node-1',
-          install_phase: 'COMPLETED',
-          binding_state: 'BOUND',
-          online_status: 'ONLINE',
-          updated_at: '2026-06-07T00:00:00Z',
-          status_reason: 'First poll resolved',
-        },
-      ])
-
-      await act(async () => {
-        await Promise.resolve()
-      })
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(5000)
-      })
-
-      expect(nmApi.getNodeStatusBatch).toHaveBeenCalledTimes(2)
-    })
-  })
 })
