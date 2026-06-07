@@ -45,7 +45,45 @@ where
     }
 
     pub async fn create(&self, input: CreateNode) -> Result<Node> {
-        self.repository.create(input.into_node()).await
+        let name = input.name.trim();
+        let endpoint = input.endpoint.trim();
+
+        let mut invalid_fields = Vec::new();
+        if name.is_empty() {
+            invalid_fields.push("name");
+        }
+        if endpoint.is_empty() {
+            invalid_fields.push("endpoint");
+        }
+
+        if !invalid_fields.is_empty() {
+            return Err(NodeManageError::InvalidInput(format!(
+                "{} is required",
+                invalid_fields.join(", ")
+            )));
+        }
+
+        let existing_nodes = self
+            .repository
+            .list(PaginationParams::new(1, u32::MAX))
+            .await?;
+        if existing_nodes
+            .items
+            .iter()
+            .any(|node| node.endpoint == endpoint)
+        {
+            return Err(NodeManageError::Conflict(format!(
+                "endpoint already exists: {endpoint}"
+            )));
+        }
+
+        self.repository
+            .create(Node::new(
+                name.to_string(),
+                endpoint.to_string(),
+                input.labels,
+            ))
+            .await
     }
 
     pub async fn get(&self, id: &str) -> Result<Option<Node>> {

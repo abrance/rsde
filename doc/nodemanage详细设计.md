@@ -1089,6 +1089,17 @@ $metric_name{node_id="$node_id",agent_id="$agent_id",node_ip="$node_ip"}
 
 本文不冻结最终协议字段，但建议第一阶段接口围绕以下语义分组展开。
 
+> 2026-06 当前实现口径补充：
+>
+> - 本仓库已经正式提供并测试覆盖的 nm v1 第一阶段接口为：
+>   - `POST /api/nm/v1/nodes`
+>   - `GET /api/nm/v1/nodes`
+>   - `GET /api/nm/v1/nodes/:node_id`
+>   - `POST /api/nm/v1/nodes/:node_id/install`
+>   - `POST /api/nm/v1/agents/sync`
+> - 旧 `/api/nodes/*` 路径仍保留为兼容层，但不再作为 nm frontend v1 的主契约。
+> - 其余本节列出的 nm v1 接口，如果代码尚未实现，应视为后续规划面，而不是当前已完成事实。
+
 ### 1. 节点主数据接口
 
 - `POST /api/nm/v1/nodes`
@@ -1105,7 +1116,8 @@ $metric_name{node_id="$node_id",agent_id="$agent_id",node_ip="$node_ip"}
 
 ### 3. agent 注册接口
 
-- `POST /api/nm/v1/agents/register`
+- 第一阶段当前统一为 `POST /api/nm/v1/agents/sync`
+- `POST /api/nm/v1/agents/register` 应视为早期设计草案，不再作为当前第一阶段主协议
 
 ### 4. 节点状态接口
 
@@ -1142,6 +1154,16 @@ $metric_name{node_id="$node_id",agent_id="$agent_id",node_ip="$node_ip"}
 - 将附带哪些插件包。
 
 ## 状态机建议
+
+> 2026-06 当前实现口径补充：
+>
+> - 当前代码中的稳定显式字段仍主要是节点在线状态（`online` / `offline` / `maintenance`）以及安装/绑定相关返回。
+> - `draft` / `onboarding` / `managed` 等生命周期语义已在本轮 contract closure 中明确为第一阶段产品/研发解释边界，但尚未在所有后端读模型中落成统一显式字段。
+> - 因此前端第一阶段不应把这些生命周期名词当作当前接口 payload 中已稳定存在的字段，而应按以下业务语义理解：
+>   - create-node 成功：节点记录已创建，可视作进入 `draft`
+>   - install / sync / binding 尚未稳定完成：视作 `onboarding`
+>   - install 已触发且 agent sync / binding 链路稳定后：视作 `managed`
+> - 换句话说，当前第一阶段已经完成的是 onboarding 入口和关键链路契约收口，不是完整生命周期字段化改造。
 
 ### 1. Node 生命周期
 

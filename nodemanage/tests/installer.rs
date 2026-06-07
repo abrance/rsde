@@ -173,7 +173,7 @@ async fn ssh_installer_executes_plan_and_returns_registered_on_successful_wait()
             private_key: None,
             rsagent_package_url: "https://example.com/rsagent-1.2.3.tar.gz".to_string(),
             install_root: "/opt/rsagent".to_string(),
-            register_callback_url: "http://127.0.0.1:3000/api/nodes/agent/register".to_string(),
+            register_callback_url: "http://127.0.0.1:3000/api/nm/v1/agents/sync".to_string(),
             plugins: vec![],
             labels: vec![],
         })
@@ -184,7 +184,10 @@ async fn ssh_installer_executes_plan_and_returns_registered_on_successful_wait()
     let calls = calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
     let rendered: AgentRuntimeConfig = toml::from_str(&calls[0].2).unwrap();
-    assert_eq!(rendered.nodemanage_sync_url, "http://127.0.0.1:3000");
+    assert_eq!(
+        rendered.nodemanage_sync_url,
+        "http://127.0.0.1:3000/api/nm/v1/agents/sync"
+    );
     assert_eq!(rendered.agent_id, INSTALLER_AGENT_ID_PLACEHOLDER);
     assert_eq!(rendered.data_dir, "/opt/rsagent");
     assert!(!calls[0].2.contains("register_callback_url"));
@@ -215,7 +218,7 @@ async fn ssh_installer_returns_failed_when_registration_wait_fails() {
             private_key: None,
             rsagent_package_url: "https://example.com/rsagent-1.2.3.tar.gz".to_string(),
             install_root: "/opt/rsagent".to_string(),
-            register_callback_url: "http://127.0.0.1:3000/api/nodes/agent/register".to_string(),
+            register_callback_url: "http://127.0.0.1:3000/api/nm/v1/agents/sync".to_string(),
             plugins: vec![],
             labels: vec![],
         })
@@ -258,13 +261,16 @@ fn ssh_connection_request_uses_private_key_when_password_absent() {
 fn runtime_config_contains_sync_bootstrap_fields() {
     let config = InstallRuntimeConfig::new(
         "/opt/rsagent".to_string(),
-        "http://127.0.0.1:3000/api/nodes/agent/register".to_string(),
+        "http://127.0.0.1:3000/api/nm/v1/agents/sync".to_string(),
     );
 
     let rendered = config.render().unwrap();
     let parsed: AgentRuntimeConfig = toml::from_str(&rendered).unwrap();
 
-    assert_eq!(parsed.nodemanage_sync_url, "http://127.0.0.1:3000");
+    assert_eq!(
+        parsed.nodemanage_sync_url,
+        "http://127.0.0.1:3000/api/nm/v1/agents/sync"
+    );
     assert_eq!(parsed.agent_id, INSTALLER_AGENT_ID_PLACEHOLDER);
     assert_eq!(parsed.data_dir, "/opt/rsagent");
     assert!(!rendered.contains("register_callback_url"));

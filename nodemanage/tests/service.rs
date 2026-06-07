@@ -99,6 +99,58 @@ async fn manager_can_create_and_get_node() {
 }
 
 #[tokio::test]
+async fn manager_rejects_create_node_with_blank_required_fields() {
+    let manager = manager();
+
+    let error = manager
+        .create(CreateNode {
+            name: "   ".to_string(),
+            endpoint: "".to_string(),
+            labels: vec![],
+        })
+        .await
+        .expect_err("blank create-node input should fail");
+
+    match error {
+        NodeManageError::InvalidInput(message) => {
+            assert!(message.contains("name"));
+            assert!(message.contains("endpoint"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn manager_rejects_create_node_with_duplicate_endpoint() {
+    let manager = manager();
+
+    manager
+        .create(CreateNode {
+            name: "worker-1".to_string(),
+            endpoint: "http://worker-1:8080".to_string(),
+            labels: vec![],
+        })
+        .await
+        .unwrap();
+
+    let error = manager
+        .create(CreateNode {
+            name: "worker-2".to_string(),
+            endpoint: "http://worker-1:8080".to_string(),
+            labels: vec![],
+        })
+        .await
+        .expect_err("duplicate endpoint should fail");
+
+    match error {
+        NodeManageError::Conflict(message) => {
+            assert!(message.contains("endpoint"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn manager_updates_node_fields() {
     let manager = manager();
     let created = manager

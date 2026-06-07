@@ -55,6 +55,7 @@ pub enum NodeManageError {
     RebindTargetAlreadyBound(String),
     InvalidRebindRequest(String),
     InvalidInput(String),
+    Conflict(String),
     Storage(String),
 }
 
@@ -70,6 +71,7 @@ impl fmt::Display for NodeManageError {
             }
             Self::InvalidRebindRequest(message) => write!(f, "invalid rebind request: {message}"),
             Self::InvalidInput(message) => write!(f, "invalid node input: {message}"),
+            Self::Conflict(message) => write!(f, "node conflict: {message}"),
             Self::Storage(message) => write!(f, "node storage error: {message}"),
         }
     }
