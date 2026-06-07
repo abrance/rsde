@@ -66,14 +66,12 @@ pub async fn build_api_app(global_config: GlobalConfig) -> anyhow::Result<Router
             let shared = datalink_engine::SharedMemoryRuntime::new();
             let datalink_routes =
                 datalink_engine::create_routes_with_shared_memory(datalink_cfg, shared.clone())?;
-            let nodemanage_routes = nodemanage::create_routes_with_shared_memory(
-                nodemanage_cfg.clone(),
-                shared.clone(),
-            )
-            .await?;
-            let nodemanage_v1_routes =
-                nodemanage::create_v1_routes_with_shared_memory(nodemanage_cfg, shared.clone())
-                    .await?;
+            let (nodemanage_routes, nodemanage_v1_routes) =
+                nodemanage::create_legacy_and_v1_routes_with_shared_memory(
+                    nodemanage_cfg.clone(),
+                    shared.clone(),
+                )
+                .await?;
             app = app
                 .nest("/api/datalink/v1", datalink_routes)
                 .nest("/api/nodes", nodemanage_routes)
@@ -84,16 +82,16 @@ pub async fn build_api_app(global_config: GlobalConfig) -> anyhow::Result<Router
             app = app.nest("/api/datalink/v1", datalink_routes);
 
             if let Some(nodemanage_cfg) = maybe_nodemanage_cfg {
-                let nodemanage_routes = nodemanage::create_routes(nodemanage_cfg.clone()).await?;
-                let nodemanage_v1_routes = nodemanage::create_v1_routes(nodemanage_cfg).await?;
+                let (nodemanage_routes, nodemanage_v1_routes) =
+                    nodemanage::create_legacy_and_v1_routes(nodemanage_cfg).await?;
                 app = app
                     .nest("/api/nodes", nodemanage_routes)
                     .nest("/api/nm/v1", nodemanage_v1_routes);
             }
         }
         (None, Some(nodemanage_cfg)) => {
-            let nodemanage_routes = nodemanage::create_routes(nodemanage_cfg.clone()).await?;
-            let nodemanage_v1_routes = nodemanage::create_v1_routes(nodemanage_cfg).await?;
+            let (nodemanage_routes, nodemanage_v1_routes) =
+                nodemanage::create_legacy_and_v1_routes(nodemanage_cfg).await?;
             app = app
                 .nest("/api/nodes", nodemanage_routes)
                 .nest("/api/nm/v1", nodemanage_v1_routes);
