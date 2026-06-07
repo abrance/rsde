@@ -94,7 +94,7 @@ rsagent_package_url = "https://example.com/rsagent.tar.gz"
 # rsagent 默认安装根目录。
 install_root = "/opt/rsagent"
 # 远端 rsagent 安装完成后回调注册的地址。
-register_callback_url = "http://127.0.0.1:3000/api/nodes/agent/register"
+register_callback_url = "http://127.0.0.1:3000/api/nm/v1/agents/sync"
 # 等待 rsagent 完成注册的超时时间，单位秒。
 register_wait_timeout_secs = 30
 # SSH 连接超时时间，单位秒。

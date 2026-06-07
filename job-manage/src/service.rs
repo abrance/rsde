@@ -198,9 +198,14 @@ where
 fn map_node_error(err: NodeManageError) -> JobManageError {
     match err {
         NodeManageError::NotFound(node_id) => JobManageError::NodeNotFound(node_id),
-        NodeManageError::InvalidInput(message) | NodeManageError::Storage(message) => {
-            JobManageError::NodeNotFound(message)
-        }
+        NodeManageError::InstallTaskNotFound(message)
+        | NodeManageError::BindingNotFound(message)
+        | NodeManageError::TargetAgentNotFound(message)
+        | NodeManageError::RebindTargetAlreadyBound(message)
+        | NodeManageError::InvalidRebindRequest(message)
+        | NodeManageError::InvalidInput(message)
+        | NodeManageError::Conflict(message)
+        | NodeManageError::Storage(message) => JobManageError::NodeNotFound(message),
     }
 }
 

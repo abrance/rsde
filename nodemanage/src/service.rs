@@ -4,10 +4,12 @@ use query_engine::{HeartbeatStore, QueryEngine};
 
 use crate::{
     AgentRegistration, AgentRunMode, AgentSyncRequest, AgentSyncResponse, BindingState, CreateNode,
-    HeartbeatConfig, InstallNodeRequest, InstallNodeResult, JobManageConfig, Node,
-    NodeAgentBinding, NodeManageError, NodeRepository, NodeStatus, NodeStatusSnapshot,
-    OnlineStatus, PaginatedResult, PaginationParams, Result, RsAgentInstaller, SyncBindingState,
-    TaskFilterDefaults, UpdateNode,
+    HeartbeatConfig, HeartbeatRef, InstallNodeRequest, InstallNodeResult, InstallRequestSummary,
+    JobManageConfig, Node, NodeAgentBinding, NodeBindingView, NodeDetail, NodeInstallTask,
+    NodeInstallTaskReceipt, NodeInstallTaskView, NodeManageError, NodeRepository, NodeStatus,
+    NodeStatusBatchItem, NodeStatusSnapshot, NodeStatusView, NodeSummary, OnlineStatus,
+    PaginatedResult, PaginationParams, RebindNodeRequest, RebindNodeResponse, Result,
+    RsAgentInstaller, SyncBindingState, TaskFilterDefaults, UpdateNode,
 };
 
 const DEFAULT_CONFIG_VERSION: &str = "2026-05-29T10:00:00Z";
@@ -43,7 +45,45 @@ where
     }
 
     pub async fn create(&self, input: CreateNode) -> Result<Node> {
-        self.repository.create(input.into_node()).await
+        let name = input.name.trim();
+        let endpoint = input.endpoint.trim();
+
+        let mut invalid_fields = Vec::new();
+        if name.is_empty() {
+            invalid_fields.push("name");
+        }
+        if endpoint.is_empty() {
+            invalid_fields.push("endpoint");
+        }
+
+        if !invalid_fields.is_empty() {
+            return Err(NodeManageError::InvalidInput(format!(
+                "{} is required",
+                invalid_fields.join(", ")
+            )));
+        }
+
+        let existing_nodes = self
+            .repository
+            .list(PaginationParams::new(1, u32::MAX))
+            .await?;
+        if existing_nodes
+            .items
+            .iter()
+            .any(|node| node.endpoint == endpoint)
+        {
+            return Err(NodeManageError::Conflict(format!(
+                "endpoint already exists: {endpoint}"
+            )));
+        }
+
+        self.repository
+            .create(Node::new(
+                name.to_string(),
+                endpoint.to_string(),
+                input.labels,
+            ))
+            .await
     }
 
     pub async fn get(&self, id: &str) -> Result<Option<Node>> {
@@ -199,6 +239,195 @@ where
 
     pub async fn install_node(&self, request: InstallNodeRequest) -> Result<InstallNodeResult> {
         self.installer.install(request).await
+    }
+
+    pub async fn submit_install_task(
+        &self,
+        node_id: &str,
+        request: &InstallNodeRequest,
+    ) -> Result<NodeInstallTaskReceipt> {
+        self.repository
+            .get(node_id)
+            .await?
+            .ok_or_else(|| NodeManageError::NotFound(node_id.to_string()))?;
+
+        let task = self
+            .repository
+            .create_install_task(
+                NodeInstallTask::new(node_id.to_string()).with_install_request(request),
+            )
+            .await?;
+
+        Ok(NodeInstallTaskReceipt {
+            install_task_id: task.install_task_id,
+            node_id: task.node_id,
+            accepted: true,
+            task_state: "pending".to_string(),
+        })
+    }
+
+    pub async fn rebind_node(
+        &self,
+        node_id: &str,
+        request: &RebindNodeRequest,
+    ) -> Result<RebindNodeResponse> {
+        self.repository
+            .get(node_id)
+            .await?
+            .ok_or_else(|| NodeManageError::NotFound(node_id.to_string()))?;
+
+        let target_agent_id = request.target_agent_id.trim();
+        if target_agent_id.is_empty() {
+            return Err(NodeManageError::InvalidRebindRequest(
+                "target_agent_id is required".to_string(),
+            ));
+        }
+
+        let now = Utc::now();
+        let current_binding = self
+            .repository
+            .bound_agent_binding_by_node_id(node_id)
+            .await?;
+        let mut target_binding = self
+            .repository
+            .agent_binding_by_agent_id(target_agent_id)
+            .await?
+            .ok_or_else(|| NodeManageError::TargetAgentNotFound(target_agent_id.to_string()))?;
+
+        if target_binding.binding_state == BindingState::Bound && target_binding.node_id != node_id
+        {
+            return Err(NodeManageError::RebindTargetAlreadyBound(format!(
+                "agent {} is already bound to node {}",
+                target_binding.agent_id, target_binding.node_id
+            )));
+        }
+
+        let previous_agent_id = current_binding
+            .as_ref()
+            .filter(|binding| binding.agent_id != target_binding.agent_id)
+            .map(|binding| binding.agent_id.clone());
+
+        if let Some(mut current_binding) = current_binding
+            && current_binding.agent_id != target_binding.agent_id
+        {
+            current_binding.binding_state = BindingState::Stale;
+            current_binding.last_handshake_at = now;
+            current_binding.unbind_reason = request.reason.clone();
+            self.repository
+                .upsert_agent_binding(current_binding)
+                .await?;
+        }
+
+        target_binding.node_id = node_id.to_string();
+        target_binding.binding_state = BindingState::Bound;
+        target_binding.last_handshake_at = now;
+        target_binding.unbind_reason = None;
+        let target_binding = self.repository.upsert_agent_binding(target_binding).await?;
+
+        Ok(RebindNodeResponse {
+            accepted: true,
+            node_id: node_id.to_string(),
+            target_agent_id: target_binding.agent_id.clone(),
+            binding_state: Self::binding_state_label(Some(&target_binding)).to_string(),
+            previous_agent_id,
+        })
+    }
+
+    pub async fn install_task(&self, install_task_id: &str) -> Result<Option<NodeInstallTaskView>> {
+        self.repository
+            .get_install_task(install_task_id)
+            .await
+            .map(|task| task.as_ref().map(|task| self.build_install_task_view(task)))
+    }
+
+    pub async fn latest_install_task(&self, node_id: &str) -> Result<Option<NodeInstallTaskView>> {
+        self.repository
+            .latest_install_task_by_node_id(node_id)
+            .await
+            .map(|task| task.as_ref().map(|task| self.build_install_task_view(task)))
+    }
+
+    pub async fn list_node_summaries(
+        &self,
+        pagination: PaginationParams,
+    ) -> Result<PaginatedResult<NodeSummary>> {
+        let nodes = self.repository.list(pagination).await?;
+        let mut items = Vec::with_capacity(nodes.items.len());
+        for node in &nodes.items {
+            items.push(self.build_node_summary(node).await?);
+        }
+
+        Ok(PaginatedResult {
+            items,
+            total: nodes.total,
+            page: nodes.page,
+            page_size: nodes.page_size,
+            total_pages: nodes.total_pages,
+        })
+    }
+
+    pub async fn node_detail(
+        &self,
+        node_id: &str,
+        heartbeat_data_link_id: Option<String>,
+        result_table_name: Option<String>,
+    ) -> Result<NodeDetail> {
+        let node = self
+            .repository
+            .get(node_id)
+            .await?
+            .ok_or_else(|| NodeManageError::NotFound(node_id.to_string()))?;
+        let binding = self
+            .repository
+            .bound_agent_binding_by_node_id(node_id)
+            .await?;
+        let latest_install_task = self
+            .repository
+            .latest_install_task_by_node_id(node_id)
+            .await?;
+
+        Ok(NodeDetail {
+            node: self.build_node_base_info(&node),
+            binding: binding.as_ref().map(Self::build_binding_view),
+            status: self.build_status_view(&node, latest_install_task.as_ref(), binding.as_ref()),
+            latest_install_task: latest_install_task
+                .as_ref()
+                .map(|task| self.build_install_task_view(task)),
+            heartbeat_ref: heartbeat_data_link_id.map(|data_link_id| HeartbeatRef {
+                data_link_id,
+                link_purpose: "node_heartbeat".to_string(),
+                owner_service: "nodemanage".to_string(),
+                result_table_name,
+            }),
+        })
+    }
+
+    pub async fn batch_status(&self, node_ids: Vec<String>) -> Result<Vec<NodeStatusBatchItem>> {
+        let mut items = Vec::new();
+        for node_id in node_ids {
+            if let Some(node) = self.repository.get(&node_id).await? {
+                let binding = self
+                    .repository
+                    .bound_agent_binding_by_node_id(&node.id)
+                    .await?;
+                let latest_install_task = self
+                    .repository
+                    .latest_install_task_by_node_id(&node.id)
+                    .await?;
+                let status_view =
+                    self.build_status_view(&node, latest_install_task.as_ref(), binding.as_ref());
+                items.push(NodeStatusBatchItem {
+                    node_id: node.id,
+                    install_phase: status_view.install_phase,
+                    binding_state: status_view.binding_state,
+                    online_status: status_view.online_status,
+                    last_heartbeat_at: status_view.last_heartbeat_at,
+                    updated_at: node.updated_at,
+                    status_reason: status_view.status_reason,
+                });
+            }
+        }
+        Ok(items)
     }
 
     pub async fn sync_agent(&self, request: AgentSyncRequest) -> Result<AgentSyncResponse> {
@@ -367,6 +596,192 @@ where
             sync_interval_secs: DEFAULT_SYNC_INTERVAL_SECS,
             task_sync_interval_secs: DEFAULT_TASK_SYNC_INTERVAL_SECS,
             rejection_reason: Some(rejection_reason),
+        }
+    }
+
+    async fn build_node_summary(&self, node: &Node) -> Result<NodeSummary> {
+        let binding = self
+            .repository
+            .bound_agent_binding_by_node_id(&node.id)
+            .await?;
+        let latest_install_task = self
+            .repository
+            .latest_install_task_by_node_id(&node.id)
+            .await?;
+        let status = self.build_status_view(node, latest_install_task.as_ref(), binding.as_ref());
+        Ok(NodeSummary {
+            node_id: node.id.clone(),
+            node_name: node.name.clone(),
+            environment: Self::derive_environment(&node.labels),
+            labels: node.labels.clone(),
+            lifecycle_state: status.lifecycle_state,
+            install_phase: status.install_phase,
+            binding_state: status.binding_state,
+            online_status: status.online_status,
+            last_heartbeat_at: status.last_heartbeat_at,
+            updated_at: node.updated_at,
+        })
+    }
+
+    fn build_node_base_info(&self, node: &Node) -> crate::protocol::NodeBaseInfo {
+        crate::protocol::NodeBaseInfo {
+            node_id: node.id.clone(),
+            node_name: node.name.clone(),
+            endpoint: node.endpoint.clone(),
+            environment: Self::derive_environment(&node.labels),
+            labels: node.labels.clone(),
+            created_at: node.created_at,
+            updated_at: node.updated_at,
+        }
+    }
+
+    fn build_binding_view(binding: &NodeAgentBinding) -> NodeBindingView {
+        NodeBindingView {
+            node_id: binding.node_id.clone(),
+            agent_id: binding.agent_id.clone(),
+            binding_state: Self::binding_state_label(Some(binding)).to_string(),
+            first_registered_at: binding.first_registered_at,
+            last_handshake_at: binding.last_handshake_at,
+        }
+    }
+
+    fn build_status_view(
+        &self,
+        node: &Node,
+        latest_install_task: Option<&NodeInstallTask>,
+        binding: Option<&NodeAgentBinding>,
+    ) -> NodeStatusView {
+        NodeStatusView {
+            lifecycle_state: Self::derive_lifecycle_state(latest_install_task, binding),
+            install_phase: Self::install_phase_label(latest_install_task).to_string(),
+            binding_state: Self::binding_state_label(binding).to_string(),
+            online_status: Self::online_status_label(node.status.clone()).to_string(),
+            last_heartbeat_at: node.last_heartbeat_at,
+            status_reason: None,
+        }
+    }
+
+    fn build_install_task_view(&self, task: &NodeInstallTask) -> NodeInstallTaskView {
+        NodeInstallTaskView {
+            install_task_id: task.install_task_id.clone(),
+            node_id: task.node_id.clone(),
+            task_state: Self::install_task_state_label(&task.task_state).to_string(),
+            current_step: task
+                .current_step
+                .as_ref()
+                .map(|step| Self::install_task_step_label(step).to_string()),
+            error_code: task.error_code.clone(),
+            error_message: task.error_message.clone(),
+            started_at: task.started_at,
+            finished_at: task.finished_at,
+            retryable: task.retryable,
+            request_summary: self.build_install_request_summary(task),
+        }
+    }
+
+    fn build_install_request_summary(
+        &self,
+        task: &NodeInstallTask,
+    ) -> Option<InstallRequestSummary> {
+        if task.request_host.is_none()
+            && task.request_ssh_port.is_none()
+            && task.request_username.is_none()
+            && task.request_rsagent_package_url.is_none()
+            && task.request_install_root.is_none()
+            && task.request_labels.is_empty()
+            && task.request_plugin_names.is_empty()
+        {
+            return None;
+        }
+
+        Some(InstallRequestSummary {
+            host: task.request_host.clone(),
+            ssh_port: task.request_ssh_port,
+            username: task.request_username.clone(),
+            rsagent_package_url: task.request_rsagent_package_url.clone(),
+            install_root: task.request_install_root.clone(),
+            labels: task.request_labels.clone(),
+            plugin_names: task.request_plugin_names.clone(),
+        })
+    }
+
+    fn derive_environment(labels: &[String]) -> String {
+        labels
+            .iter()
+            .find_map(|label| {
+                label
+                    .strip_prefix("environment:")
+                    .or_else(|| label.strip_prefix("env:"))
+            })
+            .unwrap_or("unknown")
+            .to_string()
+    }
+
+    fn derive_lifecycle_state(
+        latest_install_task: Option<&NodeInstallTask>,
+        binding: Option<&NodeAgentBinding>,
+    ) -> String {
+        match (latest_install_task, binding) {
+            (Some(task), Some(binding))
+                if task.task_state == crate::InstallTaskState::Succeeded
+                    && binding.binding_state == BindingState::Bound =>
+            {
+                "managed".to_string()
+            }
+            (Some(_), _) => "onboarding".to_string(),
+            _ => "draft".to_string(),
+        }
+    }
+
+    fn install_phase_label(latest_install_task: Option<&NodeInstallTask>) -> &'static str {
+        match latest_install_task.map(|task| &task.task_state) {
+            Some(crate::InstallTaskState::Pending) => "pending",
+            Some(crate::InstallTaskState::Running) => "running",
+            Some(crate::InstallTaskState::WaitingRegister) => "waiting_register",
+            Some(crate::InstallTaskState::Succeeded) => "succeeded",
+            Some(crate::InstallTaskState::Failed) => "failed",
+            Some(crate::InstallTaskState::Cancelled) => "cancelled",
+            None => "not_started",
+        }
+    }
+
+    fn install_task_state_label(task_state: &crate::InstallTaskState) -> &'static str {
+        match task_state {
+            crate::InstallTaskState::Pending => "pending",
+            crate::InstallTaskState::Running => "running",
+            crate::InstallTaskState::WaitingRegister => "waiting_register",
+            crate::InstallTaskState::Succeeded => "succeeded",
+            crate::InstallTaskState::Failed => "failed",
+            crate::InstallTaskState::Cancelled => "cancelled",
+        }
+    }
+
+    fn install_task_step_label(step: &crate::InstallTaskStep) -> &'static str {
+        match step {
+            crate::InstallTaskStep::PrepareInstall => "prepare_install",
+            crate::InstallTaskStep::ResolveArtifacts => "resolve_artifacts",
+            crate::InstallTaskStep::WriteRuntimeConfig => "write_runtime_config",
+            crate::InstallTaskStep::UploadPackage => "upload_package",
+            crate::InstallTaskStep::RunInstallScript => "run_install_script",
+            crate::InstallTaskStep::StartAgent => "start_agent",
+            crate::InstallTaskStep::WaitRegister => "wait_register",
+        }
+    }
+
+    fn binding_state_label(binding: Option<&NodeAgentBinding>) -> &'static str {
+        match binding.map(|binding| &binding.binding_state) {
+            Some(BindingState::Bound) => "bound",
+            Some(BindingState::Stale) => "stale",
+            Some(BindingState::Unbound) => "unbound",
+            None => "unbound",
+        }
+    }
+
+    fn online_status_label(status: NodeStatus) -> &'static str {
+        match status {
+            NodeStatus::Online => "online",
+            NodeStatus::Offline => "offline",
+            NodeStatus::Maintenance => "unknown",
         }
     }
 }

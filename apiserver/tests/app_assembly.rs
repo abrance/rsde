@@ -113,6 +113,56 @@ async fn build_app_bootstraps_heartbeat_datalink_for_nodemanage_refresh() {
     assert_eq!(loaded_json["data"]["status"], "offline");
 }
 
+#[tokio::test]
+async fn build_app_exposes_nm_v1_node_routes_alongside_legacy_routes() {
+    let config = build_config();
+    let app = apiserver::build_app_for_test(config)
+        .await
+        .expect("build app");
+
+    let created = app
+        .clone()
+        .oneshot(make_json_request(
+            Method::POST,
+            "/api/nm/v1/nodes",
+            json!({
+                "name": "worker-v1-app",
+                "endpoint": "http://worker-v1-app:8080",
+                "labels": ["edge"]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::OK);
+    let created_json = read_json(created).await;
+    let node_id = created_json["data"]["id"].as_str().unwrap().to_string();
+
+    let v1_loaded = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/api/nm/v1/nodes/{node_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(v1_loaded.status(), StatusCode::OK);
+
+    let legacy_loaded = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(format!("/api/nodes/node/{node_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(legacy_loaded.status(), StatusCode::OK);
+}
+
 #[test]
 fn build_datalink_router_keeps_existing_test_surface() {
     let router: Router = apiserver::build_datalink_v1_router(DataLinkEngineConfig {

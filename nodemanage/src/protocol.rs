@@ -102,3 +102,125 @@ pub trait AgentRegistry: Clone + Send + Sync + 'static {
     async fn register(&self, registration: AgentRegistration) -> Result<Node>;
     async fn sync(&self, request: AgentSyncRequest) -> Result<AgentSyncResponse>;
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NodeSummary {
+    pub node_id: String,
+    pub node_name: String,
+    pub environment: String,
+    pub labels: Vec<String>,
+    pub lifecycle_state: String,
+    pub install_phase: String,
+    pub binding_state: String,
+    pub online_status: String,
+    pub last_heartbeat_at: Option<DateTime<Utc>>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NodeBaseInfo {
+    pub node_id: String,
+    pub node_name: String,
+    pub endpoint: String,
+    pub environment: String,
+    pub labels: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NodeBindingView {
+    pub node_id: String,
+    pub agent_id: String,
+    pub binding_state: String,
+    pub first_registered_at: DateTime<Utc>,
+    pub last_handshake_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NodeStatusView {
+    pub lifecycle_state: String,
+    pub install_phase: String,
+    pub binding_state: String,
+    pub online_status: String,
+    pub last_heartbeat_at: Option<DateTime<Utc>>,
+    pub status_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HeartbeatRef {
+    pub data_link_id: String,
+    pub link_purpose: String,
+    pub owner_service: String,
+    pub result_table_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InstallRequestSummary {
+    pub host: Option<String>,
+    pub ssh_port: Option<u16>,
+    pub username: Option<String>,
+    pub rsagent_package_url: Option<String>,
+    pub install_root: Option<String>,
+    pub labels: Vec<String>,
+    pub plugin_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NodeInstallTaskView {
+    pub install_task_id: String,
+    pub node_id: String,
+    pub task_state: String,
+    pub current_step: Option<String>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub retryable: bool,
+    pub request_summary: Option<InstallRequestSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NodeDetail {
+    pub node: NodeBaseInfo,
+    pub binding: Option<NodeBindingView>,
+    pub status: NodeStatusView,
+    pub latest_install_task: Option<NodeInstallTaskView>,
+    pub heartbeat_ref: Option<HeartbeatRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NodeStatusBatchItem {
+    pub node_id: String,
+    pub install_phase: String,
+    pub binding_state: String,
+    pub online_status: String,
+    pub last_heartbeat_at: Option<DateTime<Utc>>,
+    pub updated_at: DateTime<Utc>,
+    pub status_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NodeInstallTaskReceipt {
+    pub install_task_id: String,
+    pub node_id: String,
+    pub accepted: bool,
+    pub task_state: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RebindNodeRequest {
+    pub target_agent_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RebindNodeResponse {
+    pub accepted: bool,
+    pub node_id: String,
+    pub target_agent_id: String,
+    pub binding_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_agent_id: Option<String>,
+}
