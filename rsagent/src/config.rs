@@ -1,3 +1,3 @@
-pub use config::rsagent::AgentRuntimeConfig;
+pub use config::rsagent::{AUTO_PROVISION_AGENT_ID, AgentRuntimeConfig};
 
 pub type AgentConfig = AgentRuntimeConfig;

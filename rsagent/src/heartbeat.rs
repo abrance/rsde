@@ -3,8 +3,11 @@ use chrono::{DateTime, Utc};
 
 use crate::{
     clients::victoria_metrics::{VictoriaMetricsClient, VictoriaMetricsTransport},
+    config_sync::SyncOutcome,
     registration::{AgentIdentity, AgentRuntimeState},
-    runtime_coordinator::{RetryBackoffPolicy, next_temporary_upstream_retry_policy},
+    runtime_coordinator::{
+        TransientRetryPolicy, default_transient_retry_policy, retry_blocking_on_transient,
+    },
 };
 
 const HEARTBEAT_MEASUREMENT: &str = "rsagent_heartbeat";
@@ -21,26 +24,24 @@ pub enum HeartbeatTick {
     Skipped { reason: HeartbeatSkipReason },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HeartbeatHealthTransition {
-    EnteredDegraded,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeartbeatDiagnosticTransition {
+    Sent,
+    Degraded,
     Recovered,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeartbeatDiagnostic {
-    pub transition: HeartbeatHealthTransition,
-    pub node_id: Option<String>,
-    pub config_version: Option<String>,
-    pub reason: Option<String>,
-    pub retry_policy: Option<RetryBackoffPolicy>,
+    pub transition: HeartbeatDiagnosticTransition,
+    pub detail: String,
 }
 
 pub struct HeartbeatReporter<T> {
     transport: T,
+    retry_policy: TransientRetryPolicy,
     last_sent_at: Option<DateTime<Utc>>,
     degraded: bool,
-    last_retry_policy: Option<RetryBackoffPolicy>,
     last_diagnostic: Option<HeartbeatDiagnostic>,
 }
 
@@ -49,11 +50,15 @@ where
     T: VictoriaMetricsTransport,
 {
     pub fn new(transport: T) -> Self {
+        Self::with_retry_policy(transport, default_transient_retry_policy())
+    }
+
+    pub fn with_retry_policy(transport: T, retry_policy: TransientRetryPolicy) -> Self {
         Self {
             transport,
+            retry_policy,
             last_sent_at: None,
             degraded: false,
-            last_retry_policy: None,
             last_diagnostic: None,
         }
     }
@@ -65,11 +70,9 @@ where
         agent_id: &str,
         identity: &AgentIdentity,
     ) -> Result<HeartbeatTick> {
-        let was_degraded = self.degraded;
         let config = match state.effective_config() {
             Some(config) => config,
             None => {
-                self.last_diagnostic = None;
                 return Ok(HeartbeatTick::Skipped {
                     reason: HeartbeatSkipReason::MissingConfig,
                 });
@@ -79,7 +82,6 @@ where
         if let Some(last_sent_at) = self.last_sent_at {
             let elapsed = now.signed_duration_since(last_sent_at).num_seconds();
             if elapsed >= 0 && (elapsed as u64) < config.heartbeat_config.interval_secs {
-                self.last_diagnostic = None;
                 return Ok(HeartbeatTick::Skipped {
                     reason: HeartbeatSkipReason::IntervalNotElapsed,
                 });
@@ -88,38 +90,55 @@ where
 
         let payload = build_heartbeat_payload(state, agent_id, identity, now)?;
         let client = VictoriaMetricsClient::new(config.heartbeat_config.vm_base_url.clone());
+        let was_degraded = self.degraded;
 
-        match client.write(&mut self.transport, &payload) {
+        match retry_blocking_on_transient(&self.retry_policy, || {
+            client.write(&mut self.transport, &payload)
+        }) {
             Ok(()) => {
                 self.last_sent_at = Some(now);
                 self.degraded = false;
-                self.last_retry_policy = None;
-                self.last_diagnostic =
-                    (was_degraded && !self.degraded).then(|| HeartbeatDiagnostic {
-                        transition: HeartbeatHealthTransition::Recovered,
-                        node_id: state.local_node_id().map(ToString::to_string),
-                        config_version: state.config_version().map(ToString::to_string),
-                        reason: None,
-                        retry_policy: None,
-                    });
+                self.last_diagnostic = Some(HeartbeatDiagnostic {
+                    transition: if was_degraded {
+                        HeartbeatDiagnosticTransition::Recovered
+                    } else {
+                        HeartbeatDiagnosticTransition::Sent
+                    },
+                    detail: if was_degraded {
+                        "heartbeat write recovered after transient failure".to_string()
+                    } else {
+                        "heartbeat sent successfully".to_string()
+                    },
+                });
                 Ok(HeartbeatTick::Sent { payload })
             }
             Err(error) => {
                 self.degraded = true;
-                self.last_retry_policy = Some(next_temporary_upstream_retry_policy(
-                    self.last_retry_policy.as_ref(),
-                ));
-                self.last_diagnostic =
-                    (!was_degraded && self.degraded).then(|| HeartbeatDiagnostic {
-                        transition: HeartbeatHealthTransition::EnteredDegraded,
-                        node_id: state.local_node_id().map(ToString::to_string),
-                        config_version: state.config_version().map(ToString::to_string),
-                        reason: Some(error.to_string()),
-                        retry_policy: self.last_retry_policy.clone(),
-                    });
+                self.last_diagnostic = Some(HeartbeatDiagnostic {
+                    transition: HeartbeatDiagnosticTransition::Degraded,
+                    detail: format!("heartbeat write degraded: {error}"),
+                });
                 Err(error)
             }
         }
+    }
+
+    pub async fn tick_async(
+        mut self,
+        now: DateTime<Utc>,
+        state: AgentRuntimeState,
+        agent_id: String,
+        identity: AgentIdentity,
+    ) -> (Self, Result<HeartbeatTick>)
+    where
+        T: Send + 'static,
+    {
+        tokio::task::spawn_blocking(move || {
+            let result = self.tick(now, &state, &agent_id, &identity);
+            (self, result)
+        })
+        .await
+        .expect("heartbeat blocking task panicked")
     }
 
     pub fn is_degraded(&self) -> bool {
@@ -129,50 +148,46 @@ where
     pub fn reset(&mut self) {
         self.last_sent_at = None;
         self.degraded = false;
-        self.last_retry_policy = None;
         self.last_diagnostic = None;
     }
 
     pub fn recover(&mut self) {
-        self.degraded = false;
-        self.last_retry_policy = None;
-        self.last_diagnostic = Some(HeartbeatDiagnostic {
-            transition: HeartbeatHealthTransition::Recovered,
-            node_id: None,
-            config_version: None,
-            reason: None,
-            retry_policy: None,
-        });
+        self.mark_recovered("heartbeat recovered".to_string());
     }
 
-    pub fn last_retry_policy(&self) -> Option<&RetryBackoffPolicy> {
-        self.last_retry_policy.as_ref()
+    pub fn into_transport(self) -> T {
+        self.transport
     }
 
     pub fn last_diagnostic(&self) -> Option<&HeartbeatDiagnostic> {
         self.last_diagnostic.as_ref()
     }
 
-    pub fn take_diagnostic(&mut self) -> Option<HeartbeatDiagnostic> {
-        self.last_diagnostic.take()
-    }
-
-    pub fn into_transport(self) -> T {
-        self.transport
+    fn mark_recovered(&mut self, detail: String) {
+        self.degraded = false;
+        self.last_diagnostic = Some(HeartbeatDiagnostic {
+            transition: HeartbeatDiagnosticTransition::Recovered,
+            detail,
+        });
     }
 }
 
-pub fn apply_sync_refresh<T>(
+pub fn reconcile_after_sync<T>(
     reporter: &mut HeartbeatReporter<T>,
-    state: &mut AgentRuntimeState,
-    reset_reporter: bool,
+    outcome: &SyncOutcome,
+    state: &AgentRuntimeState,
 ) where
     T: VictoriaMetricsTransport,
 {
-    state.promote_staged_config_to_effective();
-
-    if reset_reporter {
+    if outcome.heartbeat_reset_required {
         reporter.reset();
+    } else if reporter.is_degraded()
+        && matches!(
+            state.sync_state(),
+            crate::registration::RuntimeSyncState::Accepted
+        )
+    {
+        reporter.mark_recovered("heartbeat recovered after healthy sync".to_string());
     }
 }
 

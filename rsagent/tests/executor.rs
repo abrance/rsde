@@ -5,10 +5,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use job_manage::{
-    TaskDesiredState, TaskObservedState, TaskResource, TaskType, models::TaskFinalResultCategory,
+use job_manage::{TaskDesiredState, TaskObservedState, TaskResource, TaskType};
+use rsagent::executor::{
+    ExecutionClassification, ExecutionError, ExecutionErrorKind, ExecutionResult, LocalTaskExecutor,
 };
-use rsagent::executor::{ExecutionResult, LocalTaskExecutor};
 
 #[tokio::test]
 async fn executes_script_tasks_with_interpreter_args_and_env() {
@@ -30,7 +30,6 @@ async fn executes_script_tasks_with_interpreter_args_and_env() {
         "",
         Some(0),
         TaskObservedState::Succeeded,
-        Some(TaskFinalResultCategory::Succeeded),
     );
 }
 
@@ -55,7 +54,6 @@ async fn executes_command_tasks_in_the_requested_working_directory() {
         "",
         Some(0),
         TaskObservedState::Succeeded,
-        Some(TaskFinalResultCategory::Succeeded),
     );
 }
 
@@ -79,7 +77,10 @@ async fn captures_stdout_stderr_and_failed_exit_code_for_command_tasks() {
         "cmd-err",
         Some(7),
         TaskObservedState::Failed,
-        Some(TaskFinalResultCategory::FailedNonZeroExit),
+    );
+    assert_eq!(
+        result.classification(),
+        ExecutionClassification::NonZeroExit
     );
 }
 
@@ -94,66 +95,31 @@ async fn marks_timed_out_tasks_with_timeout_terminal_state() {
 
     let result = LocalTaskExecutor.execute(&task).await.unwrap();
 
-    assert_execution(
-        &result,
-        "",
-        "",
-        None,
-        TaskObservedState::Timeout,
-        Some(TaskFinalResultCategory::Timeout),
-    );
+    assert_execution(&result, "", "", None, TaskObservedState::Timeout);
+    assert_eq!(result.classification(), ExecutionClassification::TimedOut);
 }
 
 #[tokio::test]
-async fn classifies_successful_execution_as_succeeded() {
+async fn reports_spawn_failures_with_stable_message() {
     let task = TaskResource {
-        command_line: Some("sh".to_string()),
-        args: vec!["-c".to_string(), "printf 'ok'".to_string()],
+        command_line: Some(format!("missing-binary-{}", unique_suffix())),
         timeout_secs: Some(5),
         ..task_resource(TaskType::Command)
     };
 
-    let result = LocalTaskExecutor.execute(&task).await.unwrap();
+    let error = LocalTaskExecutor
+        .execute(&task)
+        .await
+        .unwrap_err()
+        .downcast::<ExecutionError>()
+        .unwrap();
 
-    assert_execution(
-        &result,
-        "ok",
-        "",
-        Some(0),
-        TaskObservedState::Succeeded,
-        Some(TaskFinalResultCategory::Succeeded),
-    );
-}
-
-#[tokio::test]
-async fn invalid_payload_errors_preserve_failed_invalid_payload_category() {
-    let task = TaskResource {
-        script_content: Some("printf 'script-only'".to_string()),
-        command_line: Some("sh".to_string()),
-        ..task_resource(TaskType::Script)
-    };
-
-    let error = LocalTaskExecutor.execute(&task).await.unwrap_err();
-
+    assert_eq!(error.kind(), ExecutionErrorKind::SpawnFailed);
+    assert_eq!(error.task_id(), task.task_id);
     assert_eq!(
-        TaskFinalResultCategory::FailedInvalidPayload.annotate_error_message(error.to_string()),
-        "failed_invalid_payload: script task cannot include command_line"
+        error.to_string(),
+        format!("failed to spawn task {}", task.task_id)
     );
-}
-
-#[tokio::test]
-async fn executor_start_errors_preserve_failed_executor_start_category() {
-    let task = TaskResource {
-        command_line: Some("/definitely/missing/rsagent-binary".to_string()),
-        timeout_secs: Some(5),
-        ..task_resource(TaskType::Command)
-    };
-
-    let error = LocalTaskExecutor.execute(&task).await.unwrap_err();
-
-    let annotated =
-        TaskFinalResultCategory::FailedExecutorStart.annotate_error_message(error.to_string());
-    assert!(annotated.starts_with("failed_executor_start: failed to spawn task "));
 }
 
 #[tokio::test]
@@ -164,17 +130,16 @@ async fn rejects_script_tasks_when_command_line_is_also_populated() {
         ..task_resource(TaskType::Script)
     };
 
-    let error = LocalTaskExecutor.execute(&task).await.unwrap_err();
+    let error = LocalTaskExecutor
+        .execute(&task)
+        .await
+        .unwrap_err()
+        .downcast::<ExecutionError>()
+        .unwrap();
 
-    assert!(
-        error
-            .to_string()
-            .contains("script task cannot include command_line")
-    );
-    assert_eq!(
-        TaskFinalResultCategory::FailedInvalidPayload.annotate_error_message(error.to_string()),
-        "failed_invalid_payload: script task cannot include command_line"
-    );
+    assert_eq!(error.kind(), ExecutionErrorKind::InvalidPayload);
+    assert_eq!(error.task_id(), task.task_id);
+    assert_eq!(error.to_string(), "script task cannot include command_line");
 }
 
 #[tokio::test]
@@ -185,16 +150,18 @@ async fn rejects_command_tasks_when_script_content_is_also_populated() {
         ..task_resource(TaskType::Command)
     };
 
-    let error = LocalTaskExecutor.execute(&task).await.unwrap_err();
+    let error = LocalTaskExecutor
+        .execute(&task)
+        .await
+        .unwrap_err()
+        .downcast::<ExecutionError>()
+        .unwrap();
 
-    assert!(
-        error
-            .to_string()
-            .contains("command task cannot include script_content")
-    );
+    assert_eq!(error.kind(), ExecutionErrorKind::InvalidPayload);
+    assert_eq!(error.task_id(), task.task_id);
     assert_eq!(
-        TaskFinalResultCategory::FailedInvalidPayload.annotate_error_message(error.to_string()),
-        "failed_invalid_payload: command task cannot include script_content"
+        error.to_string(),
+        "command task cannot include script_content"
     );
 }
 
@@ -204,13 +171,11 @@ fn assert_execution(
     stderr: &str,
     exit_code: Option<i32>,
     state: TaskObservedState,
-    category: Option<TaskFinalResultCategory>,
 ) {
     assert_eq!(result.stdout, stdout);
     assert_eq!(result.stderr, stderr);
     assert_eq!(result.exit_code, exit_code);
     assert_eq!(result.state, state);
-    assert_eq!(result.category, category);
 }
 
 fn task_resource(task_type: TaskType) -> TaskResource {

@@ -1,16 +1,8 @@
+use std::time::Duration;
+
+use anyhow::Result;
+
 use crate::{config_sync::SyncOutcome, registration::AgentRuntimeState};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FailureClass {
-    TemporaryUpstream,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RetryBackoffPolicy {
-    pub failure_class: FailureClass,
-    pub consecutive_failures: usize,
-    pub backoff_level: u8,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubordinateLoopDecision {
@@ -25,7 +17,6 @@ pub struct RuntimeCoordinatorEffects {
     pub rebuild_sync_interval: bool,
     pub rebuild_task_sync_interval: bool,
     pub rebuild_heartbeat_interval: bool,
-    pub retry_policy: Option<RetryBackoffPolicy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +24,73 @@ pub struct LoopIntervals {
     pub sync_interval_secs: u64,
     pub heartbeat_interval_secs: u64,
     pub task_sync_interval_secs: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransientRetryPolicy {
+    backoff_delays: Vec<Duration>,
+}
+
+impl Default for TransientRetryPolicy {
+    fn default() -> Self {
+        Self::new(vec![Duration::from_millis(50), Duration::from_millis(200)])
+    }
+}
+
+impl TransientRetryPolicy {
+    pub fn new(backoff_delays: Vec<Duration>) -> Self {
+        Self { backoff_delays }
+    }
+
+    pub fn backoff_delays(&self) -> &[Duration] {
+        &self.backoff_delays
+    }
+}
+
+pub fn default_transient_retry_policy() -> TransientRetryPolicy {
+    TransientRetryPolicy::default()
+}
+
+pub fn is_transient_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    [
+        "timeout",
+        "timed out",
+        "temporary",
+        "temporarily",
+        "connection refused",
+        "connection reset",
+        "connection aborted",
+        "broken pipe",
+        "unavailable",
+        "eof",
+    ]
+    .iter()
+    .any(|pattern| message.contains(pattern))
+}
+
+pub fn retry_blocking_on_transient<T, F>(
+    policy: &TransientRetryPolicy,
+    mut operation: F,
+) -> Result<T>
+where
+    F: FnMut() -> Result<T>,
+{
+    let mut attempt = 0usize;
+    loop {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error) if attempt < policy.backoff_delays().len() && is_transient_error(&error) => {
+                std::thread::sleep(policy.backoff_delays()[attempt]);
+                attempt += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn clamp_loop_interval_secs(interval_secs: u64) -> u64 {
+    interval_secs.max(1)
 }
 
 pub fn evaluate_subordinate_loops(state: &AgentRuntimeState) -> SubordinateLoopDecision {
@@ -44,52 +102,28 @@ pub fn evaluate_subordinate_loops(state: &AgentRuntimeState) -> SubordinateLoopD
     }
 }
 
-pub fn promote_staged_config_after_loop_switch(state: &mut AgentRuntimeState) {
-    state.promote_staged_config_to_effective();
-}
-
 pub fn effects_from_sync_outcome(outcome: &SyncOutcome) -> RuntimeCoordinatorEffects {
     RuntimeCoordinatorEffects {
         reset_heartbeat: outcome.heartbeat_reset_required,
         rebuild_sync_interval: outcome.sync_interval_changed,
         rebuild_task_sync_interval: outcome.task_sync_interval_changed,
         rebuild_heartbeat_interval: outcome.heartbeat_interval_changed,
-        retry_policy: outcome.retry_policy.clone(),
     }
-}
-
-pub fn temporary_upstream_retry_policy(consecutive_failures: usize) -> RetryBackoffPolicy {
-    let consecutive_failures = consecutive_failures.max(1);
-
-    RetryBackoffPolicy {
-        failure_class: FailureClass::TemporaryUpstream,
-        consecutive_failures,
-        backoff_level: consecutive_failures.saturating_sub(1).min(3) as u8,
-    }
-}
-
-pub fn next_temporary_upstream_retry_policy(
-    previous: Option<&RetryBackoffPolicy>,
-) -> RetryBackoffPolicy {
-    let next_count = previous
-        .filter(|policy| policy.failure_class == FailureClass::TemporaryUpstream)
-        .map(|policy| policy.consecutive_failures.saturating_add(1))
-        .unwrap_or(1);
-
-    temporary_upstream_retry_policy(next_count)
 }
 
 pub fn loop_intervals(state: &AgentRuntimeState, default_sync_interval_secs: u64) -> LoopIntervals {
     match state.effective_config() {
         Some(config) => LoopIntervals {
-            sync_interval_secs: config.sync_interval_secs,
-            heartbeat_interval_secs: config.heartbeat_config.interval_secs,
-            task_sync_interval_secs: config.task_sync_interval_secs,
+            sync_interval_secs: clamp_loop_interval_secs(config.sync_interval_secs),
+            heartbeat_interval_secs: clamp_loop_interval_secs(
+                config.heartbeat_config.interval_secs,
+            ),
+            task_sync_interval_secs: clamp_loop_interval_secs(config.task_sync_interval_secs),
         },
         None => LoopIntervals {
-            sync_interval_secs: default_sync_interval_secs,
-            heartbeat_interval_secs: default_sync_interval_secs,
-            task_sync_interval_secs: default_sync_interval_secs,
+            sync_interval_secs: clamp_loop_interval_secs(default_sync_interval_secs),
+            heartbeat_interval_secs: clamp_loop_interval_secs(default_sync_interval_secs),
+            task_sync_interval_secs: clamp_loop_interval_secs(default_sync_interval_secs),
         },
     }
 }

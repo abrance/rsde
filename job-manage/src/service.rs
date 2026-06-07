@@ -12,14 +12,14 @@ pub struct TaskListQuery {
     pub updated_after: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TaskApplyIdentity {
     pub task_id: String,
     pub agent_id: String,
     pub node_id: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TaskApplyPatch {
     pub observed_state: Option<TaskObservedState>,
     pub claimed_at: Option<String>,

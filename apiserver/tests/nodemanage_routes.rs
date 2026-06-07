@@ -28,16 +28,7 @@ async fn build_shared_memory_app() -> (Router, apiserver::datalink_engine::Share
     (
         Router::new()
             .nest("/api/datalink/v1", datalink_routes)
-            .nest("/api/nodes", nodemanage_routes.clone())
-            .nest(
-                "/api/nm/v1",
-                apiserver::nodemanage::create_v1_routes_with_shared_memory(
-                    config::nodemanage::NodeManageConfig::default(),
-                    shared.clone(),
-                )
-                .await
-                .expect("build nodemanage v1 routes"),
-            ),
+            .nest("/api/nodes", nodemanage_routes),
         shared,
     )
 }
@@ -144,18 +135,21 @@ fn agent_sync_request(node_id: Option<&str>) -> Value {
     })
 }
 
-fn create_node_request(name: &str, endpoint: &str, labels: &[&str]) -> Value {
+fn agent_sync_request_with_config_version(
+    node_id: Option<&str>,
+    config_version: Option<&str>,
+) -> Value {
     json!({
-        "name": name,
-        "endpoint": endpoint,
-        "labels": labels,
-    })
-}
-
-fn rebind_request(target_agent_id: &str, reason: Option<&str>) -> Value {
-    json!({
-        "target_agent_id": target_agent_id,
-        "reason": reason,
+        "agent_id": "agent-route-1",
+        "node_id": node_id,
+        "agent_version": "0.1.0",
+        "hostname": "worker-route",
+        "os_family": "linux",
+        "os_distribution": "ubuntu",
+        "arch": "x86_64",
+        "capabilities": ["script", "command"],
+        "started_at": "2026-05-29T10:00:00Z",
+        "config_version": config_version
     })
 }
 
@@ -265,596 +259,6 @@ async fn nodemanage_routes_support_health_create_list_and_install() {
         .await
         .unwrap();
     assert_eq!(install.status(), StatusCode::OK);
-}
-
-#[tokio::test]
-async fn nodemanage_v1_list_nodes_returns_node_summary_page() {
-    let (app, _) = build_shared_memory_app().await;
-
-    let created = app
-        .clone()
-        .oneshot(make_json_request(
-            Method::POST,
-            "/api/nm/v1/nodes",
-            create_node_request("worker-v1", "http://worker-v1:8080", &["environment:test"]),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(created.status(), StatusCode::OK);
-
-    let listed = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/api/nm/v1/nodes")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(listed.status(), StatusCode::OK);
-    let body = read_json(listed).await;
-    assert_eq!(body["success"], true);
-    assert_eq!(body["data"]["total"], 1);
-    assert_eq!(body["data"]["items"][0]["environment"], "test");
-    assert_eq!(body["data"]["items"][0]["install_phase"], "not_started");
-}
-
-#[tokio::test]
-async fn nodemanage_v1_get_node_detail_returns_aggregate() {
-    let (app, _) = build_shared_memory_app().await;
-
-    let created = app
-        .clone()
-        .oneshot(make_json_request(
-            Method::POST,
-            "/api/nm/v1/nodes",
-            create_node_request("worker-detail", "http://worker-detail:8080", &["env:prod"]),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(created.status(), StatusCode::OK);
-    let created_json = read_json(created).await;
-    let node_id = created_json["data"]["id"].as_str().unwrap();
-
-    let detail = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri(format!("/api/nm/v1/nodes/{node_id}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(detail.status(), StatusCode::OK);
-    let body = read_json(detail).await;
-    assert_eq!(body["success"], true);
-    assert_eq!(body["data"]["node"]["node_id"], node_id);
-    assert_eq!(body["data"]["node"]["environment"], "prod");
-    assert_eq!(body["data"]["status"]["install_phase"], "not_started");
-}
-
-#[tokio::test]
-async fn nodemanage_v1_get_node_detail_exposes_desensitized_latest_install_task() {
-    let (app, _) = build_shared_memory_app().await;
-
-    let created = app
-        .clone()
-        .oneshot(make_json_request(
-            Method::POST,
-            "/api/nm/v1/nodes",
-            create_node_request(
-                "worker-detail-install",
-                "http://worker-detail-install:8080",
-                &["env:prod"],
-            ),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(created.status(), StatusCode::OK);
-    let created_json = read_json(created).await;
-    let node_id = created_json["data"]["id"].as_str().unwrap();
-
-    let install = app
-        .clone()
-        .oneshot(make_json_request(
-            Method::POST,
-            &format!("/api/nm/v1/nodes/{node_id}/install"),
-            json!({
-                "host":"10.0.0.18",
-                "ssh_port":22,
-                "username":"root",
-                "password":"secret",
-                "rsagent_package_url":"https://example.com/rsagent.tar.gz",
-                "install_root":"/opt/rsagent",
-                "register_callback_url":"http://127.0.0.1:3000/api/nodes/agent/sync",
-                "plugins":[],
-                "labels":["edge"]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(install.status(), StatusCode::ACCEPTED);
-
-    let detail = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri(format!("/api/nm/v1/nodes/{node_id}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(detail.status(), StatusCode::OK);
-    let body = read_json(detail).await;
-    assert_eq!(body["success"], true);
-    assert_eq!(body["data"]["latest_install_task"]["node_id"], node_id);
-    assert_eq!(
-        body["data"]["latest_install_task"]["request_summary"]["host"],
-        "10.0.0.18"
-    );
-    assert_eq!(
-        body["data"]["latest_install_task"]["request_summary"]["username"],
-        "root"
-    );
-    assert_eq!(
-        body["data"]["latest_install_task"]["request_summary"]["labels"],
-        json!(["edge"])
-    );
-    assert!(
-        body["data"]["latest_install_task"]
-            .get("request_host")
-            .is_none()
-    );
-    assert!(!body.to_string().contains("password"));
-    assert!(!body.to_string().contains("private_key"));
-    assert!(!body.to_string().contains("register_callback_url"));
-}
-
-#[tokio::test]
-async fn nodemanage_v1_get_status_batch_returns_projection() {
-    let (app, _) = build_shared_memory_app().await;
-
-    let created = app
-        .clone()
-        .oneshot(make_json_request(
-            Method::POST,
-            "/api/nm/v1/nodes",
-            create_node_request("worker-batch", "http://worker-batch:8080", &[]),
-        ))
-        .await
-        .unwrap();
-    let created_json = read_json(created).await;
-    let node_id = created_json["data"]["id"].as_str().unwrap();
-
-    let batch = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri(format!("/api/nm/v1/nodes/status:batch?node_ids={node_id}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(batch.status(), StatusCode::OK);
-    let body = read_json(batch).await;
-    assert_eq!(body["success"], true);
-    assert_eq!(body["data"][0]["node_id"], node_id);
-}
-
-#[tokio::test]
-async fn nodemanage_v1_install_returns_accepted_task_handle() {
-    let (app, _) = build_shared_memory_app().await;
-
-    let created = app
-        .clone()
-        .oneshot(make_json_request(
-            Method::POST,
-            "/api/nm/v1/nodes",
-            create_node_request("worker-install", "http://worker-install:8080", &[]),
-        ))
-        .await
-        .unwrap();
-    let created_json = read_json(created).await;
-    let node_id = created_json["data"]["id"].as_str().unwrap();
-
-    let install = app
-        .clone()
-        .oneshot(make_json_request(
-            Method::POST,
-            &format!("/api/nm/v1/nodes/{node_id}/install"),
-            json!({
-                "host":"10.0.0.8",
-                "ssh_port":22,
-                "username":"root",
-                "password":"secret",
-                "rsagent_package_url":"https://example.com/rsagent.tar.gz",
-                "install_root":"/opt/rsagent",
-                "register_callback_url":"http://127.0.0.1:3000/api/nodes/agent/sync",
-                "plugins":[],
-                "labels":["edge"]
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(install.status(), StatusCode::ACCEPTED);
-    let body = read_json(install).await;
-    assert_eq!(body["success"], true);
-    assert_eq!(body["data"]["node_id"], node_id);
-    assert_eq!(body["data"]["accepted"], true);
-    assert!(body["data"]["install_task_id"].is_string());
-
-    let install_task_id = body["data"]["install_task_id"].as_str().unwrap();
-
-    let task = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri(format!("/api/nm/v1/install-tasks/{install_task_id}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(task.status(), StatusCode::OK);
-    let task_body = read_json(task).await;
-    assert_eq!(task_body["success"], true);
-    assert_eq!(task_body["data"]["node_id"], node_id);
-    assert_eq!(task_body["data"]["task_state"], "pending");
-    assert_eq!(task_body["data"]["request_summary"]["host"], "10.0.0.8");
-    assert_eq!(task_body["data"]["request_summary"]["ssh_port"], 22);
-    assert_eq!(task_body["data"]["request_summary"]["username"], "root");
-    assert_eq!(
-        task_body["data"]["request_summary"]["labels"],
-        json!(["edge"])
-    );
-    assert!(task_body["data"].get("request_host").is_none());
-    assert!(task_body.to_string().contains("request_summary"));
-    assert!(!task_body.to_string().contains("password"));
-    assert!(!task_body.to_string().contains("private_key"));
-
-    let latest = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri(format!("/api/nm/v1/nodes/{node_id}/install-tasks:latest"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(latest.status(), StatusCode::OK);
-    let latest_body = read_json(latest).await;
-    assert_eq!(latest_body["success"], true);
-    assert_eq!(latest_body["data"]["node_id"], node_id);
-    assert_eq!(latest_body["data"]["request_summary"]["host"], "10.0.0.8");
-    assert!(latest_body["data"].get("request_host").is_none());
-}
-
-#[tokio::test]
-async fn nodemanage_v1_latest_install_task_returns_not_found_for_missing_node() {
-    let (app, _) = build_shared_memory_app().await;
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/api/nm/v1/nodes/missing-node/install-tasks:latest")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    let status = response.status();
-    let body = read_json(response).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(body["success"], false);
-    assert_eq!(body["error"]["code"], "NODE_NOT_FOUND");
-    assert!(body["error"]["details"].is_null());
-}
-
-#[tokio::test]
-async fn nodemanage_v1_binding_returns_not_found_for_missing_binding() {
-    let (app, _) = build_shared_memory_app().await;
-
-    let created = app
-        .clone()
-        .oneshot(make_json_request(
-            Method::POST,
-            "/api/nm/v1/nodes",
-            create_node_request("worker-no-binding", "http://worker-no-binding:8080", &[]),
-        ))
-        .await
-        .unwrap();
-    let created_json = read_json(created).await;
-    let node_id = created_json["data"]["id"].as_str().unwrap();
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri(format!("/api/nm/v1/nodes/{node_id}/binding"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    let body = read_json(response).await;
-    assert_eq!(body["success"], false);
-    assert_eq!(body["error"]["code"], "BINDING_NOT_FOUND");
-    assert!(body["error"]["details"].is_null());
-}
-
-#[tokio::test]
-async fn nodemanage_v1_rebind_promotes_target_binding_and_updates_read_models() {
-    let (app, _) = build_shared_memory_app().await;
-
-    let created = app
-        .clone()
-        .oneshot(make_json_request(
-            Method::POST,
-            "/api/nm/v1/nodes",
-            create_node_request("worker-rebind", "http://worker-rebind:8080", &["env:test"]),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(created.status(), StatusCode::OK);
-    let created_json = read_json(created).await;
-    let node_id = created_json["data"]["id"].as_str().unwrap().to_string();
-
-    let old_sync = app
-        .clone()
-        .oneshot(make_json_request(
-            Method::POST,
-            "/api/nm/v1/agents/sync",
-            json!({
-                "agent_id": "agent-old",
-                "node_id": node_id,
-                "agent_version": "0.1.0",
-                "hostname": "worker-old",
-                "os_family": "linux",
-                "os_distribution": "ubuntu",
-                "arch": "x86_64",
-                "capabilities": ["script", "command"],
-                "started_at": "2026-05-29T10:00:00Z",
-                "config_version": null
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(old_sync.status(), StatusCode::OK);
-
-    let target_sync = app
-        .clone()
-        .oneshot(make_json_request(
-            Method::POST,
-            "/api/nm/v1/agents/sync",
-            json!({
-                "agent_id": "agent-old",
-                "node_id": node_id,
-                "agent_version": "0.1.0",
-                "hostname": "worker-new",
-                "os_family": "linux",
-                "os_distribution": "ubuntu",
-                "arch": "x86_64",
-                "capabilities": ["script", "command"],
-                "started_at": "2026-05-29T10:00:00Z",
-                "config_version": null
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(target_sync.status(), StatusCode::OK);
-
-    let rebind = app
-        .clone()
-        .oneshot(make_json_request(
-            Method::POST,
-            &format!("/api/nm/v1/nodes/{node_id}/rebind"),
-            rebind_request("agent-old", Some("manual_rebind_after_conflict")),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(rebind.status(), StatusCode::OK);
-    let rebind_body = read_json(rebind).await;
-    assert_eq!(rebind_body["success"], true);
-    assert_eq!(rebind_body["data"]["accepted"], true);
-    assert_eq!(rebind_body["data"]["node_id"], node_id);
-    assert_eq!(rebind_body["data"]["target_agent_id"], "agent-old");
-    assert_eq!(rebind_body["data"]["binding_state"], "bound");
-    assert!(rebind_body["data"]["previous_agent_id"].is_null());
-
-    let binding = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri(format!("/api/nm/v1/nodes/{node_id}/binding"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(binding.status(), StatusCode::OK);
-    let binding_body = read_json(binding).await;
-    assert_eq!(binding_body["data"]["agent_id"], "agent-old");
-    assert_eq!(binding_body["data"]["binding_state"], "bound");
-
-    let detail = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri(format!("/api/nm/v1/nodes/{node_id}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(detail.status(), StatusCode::OK);
-    let detail_body = read_json(detail).await;
-    assert_eq!(detail_body["data"]["binding"]["agent_id"], "agent-old");
-    assert_eq!(detail_body["data"]["status"]["binding_state"], "bound");
-
-    let batch = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri(format!("/api/nm/v1/nodes/status:batch?node_ids={node_id}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(batch.status(), StatusCode::OK);
-    let batch_body = read_json(batch).await;
-    assert_eq!(batch_body["data"][0]["binding_state"], "bound");
-}
-
-#[tokio::test]
-async fn nodemanage_v1_rebind_returns_not_found_for_unknown_target_agent() {
-    let (app, _) = build_shared_memory_app().await;
-
-    let created = app
-        .clone()
-        .oneshot(make_json_request(
-            Method::POST,
-            "/api/nm/v1/nodes",
-            create_node_request(
-                "worker-rebind-missing-target",
-                "http://worker-rebind-missing-target:8080",
-                &[],
-            ),
-        ))
-        .await
-        .unwrap();
-    let created_json = read_json(created).await;
-    let node_id = created_json["data"]["id"].as_str().unwrap();
-
-    let response = app
-        .oneshot(make_json_request(
-            Method::POST,
-            &format!("/api/nm/v1/nodes/{node_id}/rebind"),
-            rebind_request("agent-missing", None),
-        ))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    let body = read_json(response).await;
-    assert_eq!(body["success"], false);
-    assert_eq!(body["error"]["code"], "TARGET_AGENT_NOT_FOUND");
-    assert!(body["error"]["details"].is_null());
-}
-
-#[tokio::test]
-async fn nodemanage_v1_rebind_returns_conflict_when_target_agent_bound_elsewhere() {
-    let (app, _) = build_shared_memory_app().await;
-
-    let created = app
-        .clone()
-        .oneshot(make_json_request(
-            Method::POST,
-            "/api/nm/v1/nodes",
-            create_node_request(
-                "worker-rebind-conflict",
-                "http://worker-rebind-conflict:8080",
-                &[],
-            ),
-        ))
-        .await
-        .unwrap();
-    let created_json = read_json(created).await;
-    let node_id = created_json["data"]["id"].as_str().unwrap().to_string();
-
-    let old_sync = app
-        .clone()
-        .oneshot(make_json_request(
-            Method::POST,
-            "/api/nm/v1/agents/sync",
-            json!({
-                "agent_id": "agent-old",
-                "node_id": node_id,
-                "agent_version": "0.1.0",
-                "hostname": "worker-old",
-                "os_family": "linux",
-                "os_distribution": "ubuntu",
-                "arch": "x86_64",
-                "capabilities": ["script", "command"],
-                "started_at": "2026-05-29T10:00:00Z",
-                "config_version": null
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(old_sync.status(), StatusCode::OK);
-
-    let target_sync = app
-        .clone()
-        .oneshot(make_json_request(
-            Method::POST,
-            "/api/nm/v1/agents/sync",
-            json!({
-                "agent_id": "agent-target",
-                "node_id": "other-node",
-                "agent_version": "0.1.0",
-                "hostname": "worker-target",
-                "os_family": "linux",
-                "os_distribution": "ubuntu",
-                "arch": "x86_64",
-                "capabilities": ["script", "command"],
-                "started_at": "2026-05-29T10:00:00Z",
-                "config_version": null
-            }),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(target_sync.status(), StatusCode::OK);
-
-    let response = app
-        .oneshot(make_json_request(
-            Method::POST,
-            &format!("/api/nm/v1/nodes/{node_id}/rebind"),
-            rebind_request("agent-target", Some("manual_rebind_after_conflict")),
-        ))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-    let body = read_json(response).await;
-    assert_eq!(body["success"], false);
-    assert_eq!(body["error"]["code"], "REBIND_TARGET_ALREADY_BOUND");
-    assert!(body["error"]["details"].is_null());
-}
-
-#[tokio::test]
-async fn nodemanage_v1_install_task_returns_not_found_for_missing_task() {
-    let (app, _) = build_shared_memory_app().await;
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(Method::GET)
-                .uri("/api/nm/v1/install-tasks/missing-task")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    let body = read_json(response).await;
-    assert_eq!(body["success"], false);
-    assert_eq!(body["error"]["code"], "INSTALL_TASK_NOT_FOUND");
-    assert!(body["error"]["details"].is_null());
 }
 
 #[tokio::test]
@@ -1105,7 +509,7 @@ async fn nodemanage_sync_returns_structured_desired_state() {
     );
     assert_eq!(
         body["data"]["job_manage_config"]["task_filter_defaults"]["states"],
-        json!(["queued", "acknowledged", "running"])
+        json!(["queued", "dispatched", "acknowledged", "running"])
     );
     assert_eq!(body["data"]["sync_interval_secs"], 30);
     assert_eq!(body["data"]["task_sync_interval_secs"], 10);
@@ -1219,6 +623,50 @@ async fn nodemanage_sync_returns_explicit_unbound_rejection() {
     assert_eq!(
         body["data"]["rejection_reason"],
         "node_id is required for initial sync"
+    );
+}
+
+#[tokio::test]
+async fn nodemanage_sync_denial_keeps_route_compatible_with_last_accepted_config_version_field() {
+    let app = apiserver::nodemanage::create_routes(config::nodemanage::NodeManageConfig::default())
+        .await
+        .unwrap();
+
+    let initial_sync = app
+        .clone()
+        .oneshot(make_json_request(
+            Method::POST,
+            "/agent/sync",
+            agent_sync_request(Some("node-route-1")),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(initial_sync.status(), StatusCode::OK);
+
+    let denied = app
+        .oneshot(make_json_request(
+            Method::POST,
+            "/agent/sync",
+            agent_sync_request_with_config_version(
+                Some("node-other"),
+                Some("2026-05-29T10:00:00Z"),
+            ),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(denied.status(), StatusCode::OK);
+    let body = read_json(denied).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["data"]["accepted"], false);
+    assert_eq!(body["data"]["binding_state"], "conflict");
+    assert_eq!(body["data"]["agent_run_mode"], "idle");
+    assert_eq!(body["data"]["config_version"], "2026-05-29T10:00:00Z");
+    assert!(
+        body["data"]["rejection_reason"]
+            .as_str()
+            .unwrap()
+            .contains("already bound")
     );
 }
 

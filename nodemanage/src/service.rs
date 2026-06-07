@@ -551,6 +551,7 @@ where
                 task_filter_defaults: TaskFilterDefaults {
                     states: vec![
                         "queued".to_string(),
+                        "dispatched".to_string(),
                         "acknowledged".to_string(),
                         "running".to_string(),
                     ],
@@ -588,6 +589,7 @@ where
                 task_filter_defaults: TaskFilterDefaults {
                     states: vec![
                         "queued".to_string(),
+                        "dispatched".to_string(),
                         "acknowledged".to_string(),
                         "running".to_string(),
                     ],

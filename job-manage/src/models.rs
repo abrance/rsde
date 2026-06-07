@@ -22,6 +22,7 @@ pub enum TaskDesiredState {
 #[serde(rename_all = "snake_case")]
 pub enum TaskObservedState {
     Queued,
+    Dispatched,
     Acknowledged,
     Running,
     Succeeded,
@@ -72,6 +73,7 @@ impl TaskFinalResultCategory {
             }
             TaskObservedState::Failed
             | TaskObservedState::Queued
+            | TaskObservedState::Dispatched
             | TaskObservedState::Acknowledged
             | TaskObservedState::Running => None,
         }
@@ -90,7 +92,9 @@ impl TaskObservedState {
 
         matches!(
             (self, next),
-            (Self::Queued, Self::Acknowledged)
+            (Self::Queued, Self::Dispatched)
+                | (Self::Queued, Self::Acknowledged)
+                | (Self::Dispatched, Self::Acknowledged)
                 | (Self::Acknowledged, Self::Running)
                 | (Self::Acknowledged, Self::Succeeded)
                 | (Self::Acknowledged, Self::Failed)
