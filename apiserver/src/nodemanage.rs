@@ -1013,12 +1013,27 @@ pub async fn create_v1_routes(
     Ok(build_v1_router(state))
 }
 
+pub async fn create_legacy_and_v1_routes(
+    config: config::nodemanage::NodeManageConfig,
+) -> anyhow::Result<(Router, Router)> {
+    let state = NodeManageState::new(config).await?;
+    Ok((build_router(state.clone()), build_v1_router(state)))
+}
+
 pub async fn create_v1_routes_with_shared_memory(
     config: config::nodemanage::NodeManageConfig,
     shared: SharedMemoryRuntime,
 ) -> anyhow::Result<Router> {
     let state = NodeManageState::new_with_shared_memory(config, Some(shared)).await?;
     Ok(build_v1_router(state))
+}
+
+pub async fn create_legacy_and_v1_routes_with_shared_memory(
+    config: config::nodemanage::NodeManageConfig,
+    shared: SharedMemoryRuntime,
+) -> anyhow::Result<(Router, Router)> {
+    let state = NodeManageState::new_with_shared_memory(config, Some(shared)).await?;
+    Ok((build_router(state.clone()), build_v1_router(state)))
 }
 
 fn build_router(state: NodeManageState) -> Router {
