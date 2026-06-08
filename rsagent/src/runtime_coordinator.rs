@@ -42,11 +42,23 @@ pub fn effects_from_sync_outcome(outcome: &SyncOutcome) -> RuntimeCoordinatorEff
 
 pub fn loop_intervals(state: &AgentRuntimeState, default_sync_interval_secs: u64) -> LoopIntervals {
     match state.effective_config() {
-        Some(config) => LoopIntervals {
-            sync_interval_secs: config.sync_interval_secs,
-            heartbeat_interval_secs: config.heartbeat_config.interval_secs,
-            task_sync_interval_secs: config.task_sync_interval_secs,
-        },
+        Some(config) => {
+            let decision = evaluate_subordinate_loops(state);
+
+            LoopIntervals {
+                sync_interval_secs: config.sync_interval_secs,
+                heartbeat_interval_secs: if decision.run_heartbeat {
+                    config.heartbeat_config.interval_secs
+                } else {
+                    default_sync_interval_secs
+                },
+                task_sync_interval_secs: if decision.run_task_sync {
+                    config.task_sync_interval_secs
+                } else {
+                    default_sync_interval_secs
+                },
+            }
+        }
         None => LoopIntervals {
             sync_interval_secs: default_sync_interval_secs,
             heartbeat_interval_secs: default_sync_interval_secs,

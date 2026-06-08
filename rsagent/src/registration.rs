@@ -5,6 +5,7 @@ use nodemanage::{
 };
 
 use crate::config::AgentRuntimeConfig;
+use crate::error::{AgentSyncError, categorize_sync_error};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentIdentity {
@@ -71,7 +72,7 @@ pub struct AgentRuntimeState {
     process_alive: bool,
     degraded: bool,
     effective_config: Option<EffectiveRuntimeConfig>,
-    last_sync_error: Option<String>,
+    last_sync_error: Option<AgentSyncError>,
 }
 
 impl AgentRuntimeState {
@@ -105,16 +106,27 @@ impl AgentRuntimeState {
 
         self.loops_enabled = false;
         self.degraded = false;
-        self.last_sync_error = response.rejection_reason.clone();
+        // Keep effective_config if it exists (fallback to last-known-good configuration)
+        self.last_sync_error = response.rejection_reason.map(AgentSyncError::Rejection);
     }
 
-    pub fn record_temporary_sync_failure(&mut self, error: String) {
-        self.last_sync_error = Some(error);
-        let has_last_good_config = self.effective_config.is_some();
-        if !has_last_good_config {
+    pub fn record_transient_sync_failure(&mut self, error: String) {
+        self.last_sync_error = Some(categorize_sync_error(&error));
+        let has_executable_runtime = self.has_executable_runtime();
+        if !has_executable_runtime {
             self.loops_enabled = false;
         }
-        self.degraded = has_last_good_config;
+        self.degraded = has_executable_runtime || self.degraded;
+    }
+
+    pub fn record_bootstrap_sync_failure(&mut self, error: String) {
+        self.last_sync_error = Some(categorize_sync_error(&error));
+        self.loops_enabled = false;
+        self.degraded = true;
+    }
+
+    fn has_executable_runtime(&self) -> bool {
+        self.effective_config.is_some()
     }
 
     pub fn local_node_id(&self) -> Option<&str> {
@@ -145,8 +157,8 @@ impl AgentRuntimeState {
         self.effective_config.as_ref()
     }
 
-    pub fn last_sync_error(&self) -> Option<&str> {
-        self.last_sync_error.as_deref()
+    pub fn last_sync_error(&self) -> Option<&AgentSyncError> {
+        self.last_sync_error.as_ref()
     }
 
     pub fn sync_client(&self) -> crate::clients::nodemanage::NodeManageSyncClient {

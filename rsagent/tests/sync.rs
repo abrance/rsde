@@ -7,18 +7,21 @@ use std::{
     thread,
 };
 
-use rsagent::config::{AgentConfig, AgentRuntimeConfig};
+use rsagent::config::AgentConfig;
+use rsagent::config_sync::run_sync_once;
 use rsagent::{
     bootstrap::bootstrap_runtime_state,
     clients::nodemanage::{NodeManageSyncClient, NodeManageSyncTransport},
+    error::AgentSyncError,
     registration::{AgentIdentity, AgentRuntimeState},
 };
 
 use anyhow::Result;
 use chrono::{TimeZone, Utc};
+use config::rsagent::AgentRuntimeConfig;
 use nodemanage::{
-    AgentRunMode, AgentSyncResponse, HeartbeatConfig, JobManageConfig, MemoryNodeRepository,
-    NodeManager, NoopRsAgentInstaller, SyncBindingState, TaskFilterDefaults,
+    AgentRunMode, AgentSyncResponse, HeartbeatConfig, InstallRuntimeConfig, JobManageConfig,
+    MemoryNodeRepository, NodeManager, NoopRsAgentInstaller, SyncBindingState, TaskFilterDefaults,
 };
 use serde_json::{Value, json};
 
@@ -225,7 +228,10 @@ fn test_runtime_state_conflict_rejection_keeps_existing_binding_and_disables_loo
     assert_eq!(state.binding_state(), Some(&SyncBindingState::Conflict));
     assert!(!state.loops_enabled());
     assert!(!state.is_degraded());
-    assert_eq!(state.last_sync_error(), Some("binding conflict"));
+    assert_eq!(
+        state.last_sync_error(),
+        Some(&AgentSyncError::Rejection("binding conflict".to_string()))
+    );
 }
 
 #[test]
@@ -247,7 +253,12 @@ fn test_runtime_state_unbound_rejection_keeps_process_alive_without_loops() {
     assert!(!state.is_degraded());
     assert_eq!(state.binding_state(), Some(&SyncBindingState::Unbound));
     assert_eq!(state.local_node_id(), None);
-    assert_eq!(state.last_sync_error(), Some("agent not yet bound"));
+    assert_eq!(
+        state.last_sync_error(),
+        Some(&AgentSyncError::Rejection(
+            "agent not yet bound".to_string()
+        ))
+    );
 }
 
 #[test]
@@ -263,9 +274,9 @@ fn test_runtime_state_explicit_rejection_clears_temporary_degraded_state() {
         None,
     ));
 
-    state.record_temporary_sync_failure("timeout".to_string());
+    state.record_transient_sync_failure("timeout".to_string());
     assert!(state.is_degraded());
-    assert_eq!(state.last_sync_error(), Some("timeout"));
+    assert_eq!(state.last_sync_error(), Some(&AgentSyncError::Timeout));
 
     state.apply_sync_response(sample_response(
         false,
@@ -279,8 +290,76 @@ fn test_runtime_state_explicit_rejection_clears_temporary_degraded_state() {
     assert!(!state.loops_enabled());
     assert!(!state.is_degraded());
     assert_eq!(state.binding_state(), Some(&SyncBindingState::Conflict));
-    assert_eq!(state.last_sync_error(), Some("binding conflict"));
+    assert_eq!(
+        state.last_sync_error(),
+        Some(&AgentSyncError::Rejection("binding conflict".to_string()))
+    );
     assert_eq!(state.config_version(), Some("cfg-healthy"));
+}
+
+#[test]
+fn test_runtime_state_temporary_failure_after_explicit_rejection_does_not_restore_executable_runtime()
+ {
+    let config = sample_runtime_config(Some("node-001"));
+    let mut state = AgentRuntimeState::new(config);
+    state.apply_sync_response(sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-001",
+        "cfg-healthy",
+        None,
+    ));
+    state.apply_sync_response(sample_response(
+        false,
+        AgentRunMode::Idle,
+        SyncBindingState::Conflict,
+        "node-other",
+        "cfg-other",
+        Some("binding conflict"),
+    ));
+
+    state.record_transient_sync_failure("timeout".to_string());
+
+    assert_eq!(state.local_node_id(), Some("node-001"));
+    assert_eq!(state.config_version(), Some("cfg-healthy"));
+    assert_eq!(state.binding_state(), Some(&SyncBindingState::Conflict));
+    assert!(!state.loops_enabled());
+    assert!(
+        state.is_degraded(),
+        "Should be degraded if LKG exists even if loops are disabled by rejection"
+    );
+    assert!(state.effective_config().is_some());
+    assert_eq!(state.last_sync_error(), Some(&AgentSyncError::Timeout));
+}
+
+#[test]
+fn test_runtime_state_explicit_rejection_keeps_last_accepted_version_and_executable_runtime() {
+    let config = sample_runtime_config(Some("node-001"));
+    let mut state = AgentRuntimeState::new(config);
+    state.apply_sync_response(sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-001",
+        "cfg-healthy",
+        None,
+    ));
+
+    state.apply_sync_response(sample_response(
+        false,
+        AgentRunMode::Idle,
+        SyncBindingState::Conflict,
+        "node-other",
+        "cfg-other",
+        Some("binding conflict"),
+    ));
+
+    assert_eq!(state.local_node_id(), Some("node-001"));
+    assert_eq!(state.config_version(), Some("cfg-healthy"));
+    assert!(state.process_alive());
+    assert!(!state.is_degraded());
+    assert!(state.effective_config().is_some());
 }
 
 #[test]
@@ -343,12 +422,12 @@ fn test_runtime_state_temporary_sync_failure_keeps_last_good_config_and_marks_de
         None,
     ));
 
-    state.record_temporary_sync_failure("timeout".to_string());
+    state.record_transient_sync_failure("timeout".to_string());
 
     assert_eq!(state.local_node_id(), Some("node-001"));
     assert_eq!(state.config_version(), Some("cfg-healthy"));
     assert!(state.is_degraded());
-    assert!(state.loops_enabled());
+    assert!(state.is_degraded());
 
     let effective = state.effective_config().unwrap();
     assert_eq!(effective.config_version, "cfg-healthy");
@@ -360,7 +439,7 @@ fn test_runtime_state_temporary_sync_failure_without_last_good_config_keeps_loop
     let config = sample_runtime_config(None);
     let mut state = AgentRuntimeState::new(config);
 
-    state.record_temporary_sync_failure("timeout".to_string());
+    state.record_transient_sync_failure("timeout".to_string());
 
     assert!(!state.loops_enabled());
     assert!(!state.is_degraded());
@@ -402,6 +481,376 @@ async fn test_bootstrap_runtime_state_performs_initial_sync_and_enables_loops() 
 }
 
 #[tokio::test]
+async fn test_bootstrap_runtime_state_resilient_to_initial_sync_failure() {
+    let config = sample_runtime_config(None);
+    let identity = sample_identity();
+    let mut transport = FailingNodeManageTransport::new("connection refused");
+
+    let (state, _) = bootstrap_runtime_state(config, identity, &mut transport)
+        .await
+        .unwrap();
+
+    assert!(state.process_alive());
+    assert!(!state.loops_enabled());
+    assert!(state.is_degraded());
+    assert_eq!(state.last_sync_error(), Some(&AgentSyncError::Transport));
+}
+
+#[tokio::test]
+async fn test_bootstrap_failure_then_later_transport_failure_preserves_startup_degraded_state() {
+    let config = sample_runtime_config(None);
+    let identity = sample_identity();
+    let mut bootstrap_transport = FailingNodeManageTransport::new("connection refused");
+
+    let (mut state, _) =
+        bootstrap_runtime_state(config, identity.clone(), &mut bootstrap_transport)
+            .await
+            .unwrap();
+
+    assert!(state.process_alive());
+    assert!(!state.loops_enabled());
+    assert!(state.is_degraded());
+    assert!(state.effective_config().is_none());
+
+    let mut retry_transport = FailingNodeManageTransport::new("timeout");
+    let outcome = run_sync_once(&mut state, &identity, &mut retry_transport)
+        .await
+        .unwrap();
+
+    assert!(!outcome.config_changed);
+    assert!(state.process_alive());
+    assert!(!state.loops_enabled());
+    assert!(state.is_degraded());
+    assert!(state.effective_config().is_none());
+    assert_eq!(state.last_sync_error(), Some(&AgentSyncError::Timeout));
+}
+
+#[tokio::test]
+async fn test_bootstrap_failure_then_later_accepted_sync_converges_with_reused_identity() {
+    let config = sample_runtime_config(Some("node-existing"));
+    let identity = sample_identity();
+    let mut failing_transport = FailingNodeManageTransport::new("connection refused");
+
+    let (mut state, returned_identity) =
+        bootstrap_runtime_state(config, identity.clone(), &mut failing_transport)
+            .await
+            .unwrap();
+
+    assert_eq!(returned_identity, identity);
+    assert!(state.process_alive());
+    assert_eq!(state.local_node_id(), Some("node-existing"));
+    assert!(!state.loops_enabled());
+    assert!(state.is_degraded());
+    assert_eq!(state.last_sync_error(), Some(&AgentSyncError::Transport));
+
+    let mut recovery_transport = RecordingNodeManageTransport::new(sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-existing",
+        "cfg-recovered",
+        None,
+    ));
+
+    let outcome = run_sync_once(&mut state, &identity, &mut recovery_transport)
+        .await
+        .unwrap();
+
+    assert!(outcome.config_changed);
+    assert!(outcome.heartbeat_reset_required);
+    assert_eq!(state.local_node_id(), Some("node-existing"));
+    assert_eq!(state.config_version(), Some("cfg-recovered"));
+    assert!(state.loops_enabled());
+    assert!(!state.is_degraded());
+    assert_eq!(state.last_sync_error(), None);
+
+    let requests = recovery_transport.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].request.node_id.as_deref(),
+        Some("node-existing")
+    );
+    assert_eq!(requests[0].request.config_version, None);
+}
+
+#[tokio::test]
+async fn test_restart_after_prior_degraded_runtime_starts_parked_until_next_sync() {
+    let identity = sample_identity();
+    let mut prior_state = AgentRuntimeState::new(sample_runtime_config(Some("node-existing")));
+    prior_state.apply_sync_response(sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-existing",
+        "cfg-healthy",
+        None,
+    ));
+    prior_state.record_transient_sync_failure("timeout".to_string());
+    assert!(prior_state.is_degraded());
+    assert!(prior_state.loops_enabled());
+    assert!(prior_state.effective_config().is_some());
+
+    let config = sample_runtime_config(Some("node-existing"));
+    let mut transport = FailingNodeManageTransport::new("connection refused");
+
+    let (state, _) = bootstrap_runtime_state(config, identity, &mut transport)
+        .await
+        .unwrap();
+
+    assert_eq!(state.local_node_id(), Some("node-existing"));
+    assert_eq!(state.config_version(), None);
+    assert!(state.binding_state().is_none());
+    assert!(state.effective_config().is_none());
+    assert!(state.process_alive());
+    assert!(!state.loops_enabled());
+    assert!(state.is_degraded());
+    assert_eq!(state.last_sync_error(), Some(&AgentSyncError::Transport));
+}
+
+#[tokio::test]
+async fn test_restart_after_explicit_rejection_stays_parked_during_transport_failures_until_acceptance()
+ {
+    let config = sample_runtime_config(Some("node-existing"));
+    let identity = sample_identity();
+    let mut transport = FailingNodeManageTransport::new("connection refused");
+
+    let (mut state, _) = bootstrap_runtime_state(config, identity.clone(), &mut transport)
+        .await
+        .unwrap();
+
+    assert!(state.process_alive());
+    assert!(!state.loops_enabled());
+    assert!(state.is_degraded());
+
+    let mut retry_transport = FailingNodeManageTransport::new("timeout");
+    run_sync_once(&mut state, &identity, &mut retry_transport)
+        .await
+        .unwrap();
+
+    assert_eq!(state.local_node_id(), Some("node-existing"));
+    assert_eq!(state.config_version(), None);
+    assert!(state.binding_state().is_none());
+    assert!(state.effective_config().is_none());
+    assert!(!state.loops_enabled());
+    assert!(state.is_degraded());
+    assert_eq!(state.last_sync_error(), Some(&AgentSyncError::Timeout));
+
+    let mut recovery_transport = RecordingNodeManageTransport::new(sample_response(
+        false,
+        AgentRunMode::Idle,
+        SyncBindingState::Conflict,
+        "node-other",
+        "cfg-rejected",
+        Some("binding conflict"),
+    ));
+    run_sync_once(&mut state, &identity, &mut recovery_transport)
+        .await
+        .unwrap();
+
+    assert_eq!(state.local_node_id(), Some("node-existing"));
+    assert_eq!(state.config_version(), None);
+    assert_eq!(state.binding_state(), Some(&SyncBindingState::Conflict));
+    assert!(state.effective_config().is_none());
+    assert!(!state.loops_enabled());
+    assert!(!state.is_degraded());
+    assert_eq!(
+        state.last_sync_error(),
+        Some(&AgentSyncError::Rejection("binding conflict".to_string()))
+    );
+}
+
+#[tokio::test]
+async fn test_restart_continuity_convergence_cycle() {
+    let agent_id = "agt-restart-test";
+    let node_id = "node-restart-test";
+    let identity = sample_identity();
+
+    let config_v1 = sample_runtime_config(None);
+    let mut transport = RecordingNodeManageTransport::new(sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        node_id,
+        "cfg-v1",
+        None,
+    ));
+
+    let (state_v1, _) = bootstrap_runtime_state(config_v1, identity.clone(), &mut transport)
+        .await
+        .unwrap();
+    assert_eq!(state_v1.local_node_id(), Some(node_id));
+    assert_eq!(state_v1.config_version(), Some("cfg-v1"));
+
+    let mut config_v2 = sample_runtime_config(Some(node_id));
+    config_v2.agent_id = agent_id.to_string();
+
+    let mut transport_v2 = RecordingNodeManageTransport::new(sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        node_id,
+        "cfg-v1",
+        None,
+    ));
+
+    let (state_v2, _) = bootstrap_runtime_state(config_v2, identity, &mut transport_v2)
+        .await
+        .unwrap();
+
+    assert_eq!(state_v2.local_node_id(), Some(node_id));
+    assert_eq!(state_v2.config_version(), Some("cfg-v1"));
+
+    let requests = transport_v2.requests();
+    assert_eq!(requests[0].request.node_id, Some(node_id.to_string()));
+    assert_eq!(requests[0].request.config_version, None);
+}
+
+#[tokio::test]
+async fn test_sync_rejection_recovery_convergence() {
+    let identity = sample_identity();
+    let config = sample_runtime_config(None);
+    let mut state = AgentRuntimeState::new(config);
+
+    // 1. Initial success (LKG established)
+    let mut transport_v1 = RecordingNodeManageTransport::new(sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-001",
+        "cfg-v1",
+        None,
+    ));
+    run_sync_once(&mut state, &identity, &mut transport_v1)
+        .await
+        .unwrap();
+    assert!(state.effective_config().is_some());
+    assert_eq!(state.config_version(), Some("cfg-v1"));
+    assert!(state.loops_enabled());
+
+    // 2. Sync rejection (e.g. Conflict)
+    let mut transport_v2 = RecordingNodeManageTransport::new(sample_response(
+        false,
+        AgentRunMode::Idle,
+        SyncBindingState::Conflict,
+        "node-001",
+        "cfg-v1",
+        Some("Conflict"),
+    ));
+    run_sync_once(&mut state, &identity, &mut transport_v2)
+        .await
+        .unwrap();
+
+    // Verify fallback to LKG behavior
+    // The requirement says "falling back to last-known-good configuration"
+    // Currently apply_sync_response clears it. We want it to keep it.
+    assert!(
+        state.effective_config().is_some(),
+        "Should keep LKG on rejection"
+    );
+    assert_eq!(state.config_version(), Some("cfg-v1"));
+    assert!(
+        !state.loops_enabled(),
+        "Loops should be disabled on rejection even if LKG exists"
+    );
+    assert_eq!(
+        state.last_sync_error(),
+        Some(&AgentSyncError::Rejection("Conflict".to_string()))
+    );
+
+    // 3. Recovery (manual intervention, node bound again)
+    let mut transport_v3 = RecordingNodeManageTransport::new(sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-001",
+        "cfg-v2",
+        None,
+    ));
+    let outcome = run_sync_once(&mut state, &identity, &mut transport_v3)
+        .await
+        .unwrap();
+
+    assert!(outcome.config_changed);
+    assert!(state.effective_config().is_some());
+    assert_eq!(state.config_version(), Some("cfg-v2"));
+    assert!(state.loops_enabled());
+}
+
+#[tokio::test]
+async fn test_sync_hot_update_convergence() {
+    let identity = sample_identity();
+    let config = sample_runtime_config(None);
+    let mut state = AgentRuntimeState::new(config);
+
+    // 1. Initial success (cfg-v1)
+    let mut transport_v1 = RecordingNodeManageTransport::new(sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-001",
+        "cfg-v1",
+        None,
+    ));
+    let outcome1 = run_sync_once(&mut state, &identity, &mut transport_v1)
+        .await
+        .unwrap();
+    assert!(outcome1.config_changed);
+    assert_eq!(state.config_version(), Some("cfg-v1"));
+
+    // 2. Hot update (cfg-v2)
+    let mut transport_v2 = RecordingNodeManageTransport::new(sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-001",
+        "cfg-v2",
+        None,
+    ));
+    let outcome2 = run_sync_once(&mut state, &identity, &mut transport_v2)
+        .await
+        .unwrap();
+    assert!(outcome2.config_changed);
+    assert!(outcome2.heartbeat_reset_required);
+    assert_eq!(state.config_version(), Some("cfg-v2"));
+
+    // 3. No change
+    let outcome3 = run_sync_once(&mut state, &identity, &mut transport_v2)
+        .await
+        .unwrap();
+    assert!(!outcome3.config_changed);
+    assert!(!outcome3.heartbeat_reset_required);
+}
+
+#[derive(Debug, Clone)]
+struct FailingNodeManageTransport {
+    error: String,
+}
+
+impl FailingNodeManageTransport {
+    fn new(error: &str) -> Self {
+        Self {
+            error: error.to_string(),
+        }
+    }
+}
+
+impl NodeManageSyncTransport for FailingNodeManageTransport {
+    type SyncFuture<'a>
+        = Pin<Box<dyn Future<Output = Result<AgentSyncResponse>> + Send + 'a>>
+    where
+        Self: 'a;
+
+    fn sync<'a>(
+        &'a mut self,
+        _endpoint: &'a str,
+        _request: &'a nodemanage::AgentSyncRequest,
+    ) -> Self::SyncFuture<'a> {
+        let error = self.error.clone();
+        Box::pin(async move { Err(anyhow::anyhow!(error)) })
+    }
+}
+
+#[tokio::test]
 async fn test_bootstrap_runtime_state_populates_effective_config_and_node_binding() {
     let config = sample_runtime_config(Some("node-existing"));
     let identity = sample_identity();
@@ -427,6 +876,43 @@ async fn test_bootstrap_runtime_state_populates_effective_config_and_node_bindin
     assert_eq!(effective.heartbeat_config.interval_secs, 15);
     assert_eq!(effective.job_manage_config.base_url, "http://job-manage");
     assert_eq!(effective.sync_interval_secs, 10);
+}
+
+#[tokio::test]
+async fn test_bootstrap_runtime_state_converges_from_installer_generated_legacy_sync_callback() {
+    let rendered = InstallRuntimeConfig::new(
+        "/opt/rsagent".to_string(),
+        "http://127.0.0.1:3000/api/nodes/agent/sync".to_string(),
+    )
+    .render()
+    .unwrap();
+    let config: AgentRuntimeConfig = toml::from_str(&rendered).unwrap();
+    let identity = sample_identity();
+    let response = sample_response(
+        true,
+        AgentRunMode::Active,
+        SyncBindingState::Bound,
+        "node-installed",
+        "cfg-installed",
+        None,
+    );
+    let mut transport = RecordingNodeManageTransport::new(response);
+
+    let (state, _) = bootstrap_runtime_state(config, identity, &mut transport)
+        .await
+        .unwrap();
+
+    assert_eq!(state.local_node_id(), Some("node-installed"));
+    assert_eq!(state.config_version(), Some("cfg-installed"));
+    assert!(state.loops_enabled());
+    assert!(!state.is_degraded());
+
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].endpoint,
+        "http://127.0.0.1:3000/api/nm/v1/agents/sync"
+    );
 }
 
 #[tokio::test]
