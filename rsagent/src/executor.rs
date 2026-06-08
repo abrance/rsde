@@ -22,12 +22,18 @@ pub struct LocalTaskExecutor;
 
 impl LocalTaskExecutor {
     pub async fn execute(&self, task: &TaskResource) -> Result<ExecutionResult> {
-        let mut command = build_command(task)?;
+        let mut command = build_command(task).map_err(|error| {
+            anyhow::anyhow!("invalid task payload for task {}: {error}", task.task_id)
+        })?;
+        let command_description = describe_command(&command);
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-        let mut child = command
-            .spawn()
-            .with_context(|| format!("failed to spawn task {}", task.task_id))?;
+        let mut child = command.spawn().with_context(|| {
+            format!(
+                "task spawn failure for task {} while spawning {}",
+                task.task_id, command_description
+            )
+        })?;
 
         let stdout_handle = spawn_stdout_reader(child.stdout.take());
         let stderr_handle = spawn_stderr_reader(child.stderr.take());
@@ -42,6 +48,21 @@ impl LocalTaskExecutor {
             exit_code: completion.exit_code,
             state: completion.state,
         })
+    }
+}
+
+fn describe_command(command: &Command) -> String {
+    let std_command = command.as_std();
+    let program = std_command.get_program().to_string_lossy();
+    let args = std_command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+    if args.is_empty() {
+        format!("`{program}`")
+    } else {
+        format!("`{program} {}`", args.join(" "))
     }
 }
 

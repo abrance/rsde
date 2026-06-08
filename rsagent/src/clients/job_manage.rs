@@ -1,3 +1,7 @@
+use std::future::Future;
+use std::pin::Pin;
+use std::time::Duration;
+
 use anyhow::{Context, Result, anyhow};
 use job_manage::{
     TaskApplyIdentity, TaskApplyPatch, TaskListQuery, TaskObservedState, TaskResource,
@@ -5,14 +9,26 @@ use job_manage::{
 use serde::{Deserialize, Serialize};
 
 pub trait JobManageTransport {
-    fn list_tasks(&mut self, endpoint: &str, query: &TaskListQuery) -> Result<Vec<TaskResource>>;
+    type ListTasksFuture<'a>: Future<Output = Result<Vec<TaskResource>>> + Send + 'a
+    where
+        Self: 'a;
 
-    fn apply_task(
-        &mut self,
-        endpoint: &str,
-        identity: &TaskApplyIdentity,
-        patch: &TaskApplyPatch,
-    ) -> Result<TaskApplyAck>;
+    fn list_tasks<'a>(
+        &'a mut self,
+        endpoint: &'a str,
+        query: &'a TaskListQuery,
+    ) -> Self::ListTasksFuture<'a>;
+
+    type ApplyTaskFuture<'a>: Future<Output = Result<TaskApplyAck>> + Send + 'a
+    where
+        Self: 'a;
+
+    fn apply_task<'a>(
+        &'a mut self,
+        endpoint: &'a str,
+        identity: &'a TaskApplyIdentity,
+        patch: &'a TaskApplyPatch,
+    ) -> Self::ApplyTaskFuture<'a>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -42,7 +58,7 @@ impl JobManageSyncClient {
         format!("{}/tasks:apply", self.base_url.trim_end_matches('/'))
     }
 
-    pub fn list_tasks<T>(
+    pub async fn list_tasks<T>(
         &self,
         transport: &mut T,
         query: &TaskListQuery,
@@ -50,10 +66,10 @@ impl JobManageSyncClient {
     where
         T: JobManageTransport,
     {
-        transport.list_tasks(&self.tasks_endpoint(), query)
+        transport.list_tasks(&self.tasks_endpoint(), query).await
     }
 
-    pub fn apply_task<T>(
+    pub async fn apply_task<T>(
         &self,
         transport: &mut T,
         identity: &TaskApplyIdentity,
@@ -62,71 +78,96 @@ impl JobManageSyncClient {
     where
         T: JobManageTransport,
     {
-        transport.apply_task(&self.apply_endpoint(), identity, patch)
+        transport
+            .apply_task(&self.apply_endpoint(), identity, patch)
+            .await
     }
 }
 
 pub struct ReqwestJobManageTransport {
-    client: reqwest::blocking::Client,
+    client: reqwest::Client,
 }
 
 impl Default for ReqwestJobManageTransport {
     fn default() -> Self {
         Self {
-            client: reqwest::blocking::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .expect("failed to build reqwest client"),
         }
     }
 }
 
 impl JobManageTransport for ReqwestJobManageTransport {
-    fn list_tasks(&mut self, endpoint: &str, query: &TaskListQuery) -> Result<Vec<TaskResource>> {
-        let mut request = self.client.get(endpoint).query(&[
-            ("agent_id", query.agent_id.as_str()),
-            ("node_id", query.node_id.as_str()),
-        ]);
+    type ListTasksFuture<'a>
+        = Pin<Box<dyn Future<Output = Result<Vec<TaskResource>>> + Send + 'a>>
+    where
+        Self: 'a;
 
-        let states = encode_states(&query.states)?;
-        if !states.is_empty() {
-            request = request.query(&[("states", states.as_str())]);
-        }
+    fn list_tasks<'a>(
+        &'a mut self,
+        endpoint: &'a str,
+        query: &'a TaskListQuery,
+    ) -> Self::ListTasksFuture<'a> {
+        Box::pin(async move {
+            let mut request = self.client.get(endpoint).query(&[
+                ("agent_id", query.agent_id.as_str()),
+                ("node_id", query.node_id.as_str()),
+            ]);
 
-        if let Some(updated_after) = query.updated_after.as_deref() {
-            request = request.query(&[("updated_after", updated_after)]);
-        }
+            let states = encode_states(&query.states)?;
+            if !states.is_empty() {
+                request = request.query(&[("states", states.as_str())]);
+            }
 
-        let response = request
-            .send()
-            .with_context(|| format!("failed to GET task list from {endpoint}"))?;
+            if let Some(updated_after) = query.updated_after.as_deref() {
+                request = request.query(&[("updated_after", updated_after)]);
+            }
 
-        let envelope: TaskListEnvelope = decode_response(response, endpoint)?;
-        envelope
-            .data
-            .map(|data| data.items)
-            .ok_or_else(|| anyhow!("job-manage task list response missing data"))
+            let response = request
+                .send()
+                .await
+                .with_context(|| format!("failed to GET task list from {endpoint}"))?;
+
+            let envelope: TaskListEnvelope = decode_response(response, endpoint).await?;
+            envelope
+                .data
+                .map(|data| data.items)
+                .ok_or_else(|| anyhow!("job-manage task list response missing data"))
+        })
     }
 
-    fn apply_task(
-        &mut self,
-        endpoint: &str,
-        identity: &TaskApplyIdentity,
-        patch: &TaskApplyPatch,
-    ) -> Result<TaskApplyAck> {
-        let response = self
-            .client
-            .post(endpoint)
-            .query(&[
-                ("task_id", identity.task_id.as_str()),
-                ("agent_id", identity.agent_id.as_str()),
-                ("node_id", identity.node_id.as_str()),
-            ])
-            .json(&TaskApplyBody::from(patch))
-            .send()
-            .with_context(|| format!("failed to POST task apply to {endpoint}"))?;
+    type ApplyTaskFuture<'a>
+        = Pin<Box<dyn Future<Output = Result<TaskApplyAck>> + Send + 'a>>
+    where
+        Self: 'a;
 
-        let envelope: TaskApplyEnvelope = decode_response(response, endpoint)?;
-        envelope
-            .data
-            .ok_or_else(|| anyhow!("job-manage task apply response missing data"))
+    fn apply_task<'a>(
+        &'a mut self,
+        endpoint: &'a str,
+        identity: &'a TaskApplyIdentity,
+        patch: &'a TaskApplyPatch,
+    ) -> Self::ApplyTaskFuture<'a> {
+        Box::pin(async move {
+            let response = self
+                .client
+                .post(endpoint)
+                .query(&[
+                    ("task_id", identity.task_id.as_str()),
+                    ("agent_id", identity.agent_id.as_str()),
+                    ("node_id", identity.node_id.as_str()),
+                ])
+                .json(&TaskApplyBody::from(patch))
+                .send()
+                .await
+                .with_context(|| format!("failed to POST task apply to {endpoint}"))?;
+
+            let envelope: TaskApplyEnvelope = decode_response(response, endpoint).await?;
+            envelope
+                .data
+                .ok_or_else(|| anyhow!("job-manage task apply response missing data"))
+        })
     }
 }
 
@@ -201,36 +242,43 @@ fn encode_states(states: &[TaskObservedState]) -> Result<String> {
         .map(|values| values.join(","))
 }
 
-fn decode_response<T>(response: reqwest::blocking::Response, endpoint: &str) -> Result<T>
+fn decode_response<T>(
+    response: reqwest::Response,
+    endpoint: &str,
+) -> impl Future<Output = Result<T>>
 where
     T: for<'de> Deserialize<'de>,
 {
-    let status = response.status();
-    let body = response
-        .text()
-        .with_context(|| format!("failed to read job-manage response body from {endpoint}"))?;
+    let endpoint = endpoint.to_string();
+    async move {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .with_context(|| format!("failed to read job-manage response body from {endpoint}"))?;
 
-    if !status.is_success() {
-        return Err(anyhow!(
-            "job-manage request to {endpoint} failed with status {status}: {body}"
-        ));
+        if !status.is_success() {
+            return Err(anyhow!(
+                "job-manage request to {endpoint} failed with status {status}: {body}"
+            ));
+        }
+
+        let value: serde_json::Value = serde_json::from_str(&body)
+            .with_context(|| format!("invalid JSON response from {endpoint}"))?;
+
+        if let Some(success) = value.get("success").and_then(|value| value.as_bool())
+            && !success
+        {
+            let error = value
+                .get("error")
+                .and_then(|value| value.as_str())
+                .unwrap_or("unknown job-manage error");
+            return Err(anyhow!(
+                "job-manage request to {endpoint} returned error: {error}"
+            ));
+        }
+
+        serde_json::from_value(value)
+            .with_context(|| format!("failed to decode response from {endpoint}"))
     }
-
-    let value: serde_json::Value = serde_json::from_str(&body)
-        .with_context(|| format!("invalid JSON response from {endpoint}"))?;
-
-    if let Some(success) = value.get("success").and_then(|value| value.as_bool())
-        && !success
-    {
-        let error = value
-            .get("error")
-            .and_then(|value| value.as_str())
-            .unwrap_or("unknown job-manage error");
-        return Err(anyhow!(
-            "job-manage request to {endpoint} returned error: {error}"
-        ));
-    }
-
-    serde_json::from_value(value)
-        .with_context(|| format!("failed to decode response from {endpoint}"))
 }

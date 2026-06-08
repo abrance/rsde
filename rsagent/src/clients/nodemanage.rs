@@ -1,4 +1,4 @@
-use std::{future::Future, pin::Pin};
+use std::{future::Future, pin::Pin, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use nodemanage::{AgentSyncRequest, AgentSyncResponse};
@@ -74,7 +74,10 @@ pub struct ReqwestNodeManageSyncTransport {
 impl Default for ReqwestNodeManageSyncTransport {
     fn default() -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .expect("failed to build reqwest client"),
         }
     }
 }

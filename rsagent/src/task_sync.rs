@@ -5,11 +5,13 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use job_manage::{
     TaskApplyIdentity, TaskApplyPatch, TaskListQuery, TaskObservedState, TaskResource, TaskType,
 };
+use tracing::{info, warn};
 
 use crate::{
     clients::job_manage::{JobManageSyncClient, JobManageTransport, ReqwestJobManageTransport},
     executor::{ExecutionResult, LocalTaskExecutor},
     registration::AgentRuntimeState,
+    retry::{transport_max_attempts, transport_retry_delay},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,6 +19,10 @@ pub enum TaskSyncSkipReason {
     MissingConfig,
     LoopsDisabled,
     NoTasks,
+    ExistingActiveTask {
+        task_id: String,
+        observed_state: TaskObservedState,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,10 +72,9 @@ where
         .await?;
         if matches!(
             tick,
-            TaskSyncTick::Applied { .. }
-                | TaskSyncTick::Skipped {
-                    reason: TaskSyncSkipReason::NoTasks,
-                }
+            TaskSyncTick::Skipped {
+                reason: TaskSyncSkipReason::NoTasks,
+            }
         ) {
             self.updated_after = Some(timestamp(now));
         }
@@ -140,10 +145,65 @@ where
     let query = TaskListQuery {
         agent_id: agent_id.to_string(),
         node_id: node_id.to_string(),
-        states: parse_default_states(&config.job_manage_config.task_filter_defaults.states)?,
-        updated_after,
+        states: task_query_states(&config.job_manage_config.task_filter_defaults.states)?,
+        updated_after: updated_after.clone(),
     };
-    let mut tasks = client.list_tasks(transport, &query)?;
+
+    let mut attempt = 0;
+    let mut tasks = loop {
+        match client.list_tasks(transport, &query).await {
+            Ok(tasks) => {
+                if attempt > 0 {
+                    info!(
+                        agent_id,
+                        node_id,
+                        retries = attempt,
+                        max_attempts = transport_max_attempts(),
+                        updated_after = ?query.updated_after,
+                        "task sync list recovered after retry"
+                    );
+                }
+                break tasks;
+            }
+            Err(error) => match transport_retry_delay(attempt) {
+                Some(delay) => {
+                    attempt += 1;
+                    warn!(
+                        agent_id,
+                        node_id,
+                        failed_attempt = attempt,
+                        next_attempt = attempt + 1,
+                        max_attempts = transport_max_attempts(),
+                        delay_ms = delay.as_millis() as u64,
+                        error = %error,
+                        "task sync list failed; retrying"
+                    );
+                    tokio::time::sleep(delay).await;
+                }
+                None => {
+                    warn!(
+                        agent_id,
+                        node_id,
+                        failed_attempt = attempt + 1,
+                        max_attempts = transport_max_attempts(),
+                        error = %error,
+                        "task sync list failed; retry budget exhausted"
+                    );
+                    return Err(error);
+                }
+            },
+        }
+    };
+
+    if attempt > 0 {
+        info!(
+            agent_id,
+            node_id,
+            updated_after = ?query.updated_after,
+            recovered_after_retries = attempt,
+            "task sync list completed after retries"
+        );
+    }
 
     let Some(task) = tasks.drain(..).next() else {
         return Ok(TaskSyncTick::Skipped {
@@ -151,58 +211,134 @@ where
         });
     };
 
+    if matches!(
+        task.observed_state,
+        TaskObservedState::Acknowledged | TaskObservedState::Running
+    ) {
+        if updated_after.is_none() {
+            warn!(
+                task_id = %task.task_id,
+                observed_state = ?task.observed_state,
+                claimed_at = ?task.claimed_at,
+                started_at = ?task.started_at,
+                updated_at = ?task.updated_at,
+                "active task detected on initial task-sync poll after startup; execution remains stalled until backend state changes"
+            );
+        }
+        return Ok(TaskSyncTick::Skipped {
+            reason: TaskSyncSkipReason::ExistingActiveTask {
+                task_id: task.task_id,
+                observed_state: task.observed_state,
+            },
+        });
+    }
+
     let identity = TaskApplyIdentity {
         task_id: task.task_id.clone(),
         agent_id: task.agent_id.clone(),
         node_id: task.node_id.clone(),
     };
-    let now = timestamp(now);
+    let claimed_at = timestamp(now);
 
-    client.apply_task(
+    apply_task_with_retry(
+        &client,
         transport,
         &identity,
         &TaskApplyPatch {
             observed_state: Some(TaskObservedState::Acknowledged),
-            claimed_at: Some(now.clone()),
-            updated_at: Some(now.clone()),
+            claimed_at: Some(claimed_at.clone()),
+            updated_at: Some(claimed_at.clone()),
             ..Default::default()
         },
-    )?;
+    )
+    .await?;
 
     let final_patch = match validate_task_payload(&task) {
         Ok(()) => {
-            client.apply_task(
+            let started_at = timestamp(Utc::now());
+            apply_task_with_retry(
+                &client,
                 transport,
                 &identity,
                 &TaskApplyPatch {
                     observed_state: Some(TaskObservedState::Running),
-                    started_at: Some(now.clone()),
-                    updated_at: Some(now.clone()),
+                    started_at: Some(started_at.clone()),
+                    updated_at: Some(started_at.clone()),
                     ..Default::default()
                 },
-            )?;
+            )
+            .await?;
 
             match executor.execute(&task).await {
-                Ok(result) => TaskApplyPatch {
-                    observed_state: Some(result.state),
-                    finished_at: Some(now.clone()),
-                    stdout: Some(result.stdout),
-                    stderr: Some(result.stderr),
-                    exit_code: result.exit_code,
-                    updated_at: Some(now.clone()),
-                    ..Default::default()
-                },
-                Err(error) => failure_patch(error.to_string(), &now),
+                Ok(result) => execution_result_patch(result, timestamp(Utc::now())),
+                Err(error) => execution_failure_patch(error.to_string(), timestamp(Utc::now())),
             }
         }
-        Err(error) => failure_patch(error.to_string(), &now),
+        Err(error) => validation_failure_patch(error.to_string(), claimed_at),
     };
 
-    let applied = client.apply_task(transport, &identity, &final_patch)?;
+    let applied = apply_task_with_retry(&client, transport, &identity, &final_patch).await?;
     Ok(TaskSyncTick::Applied {
         task_id: applied.task_id,
         final_state: applied.observed_state,
     })
+}
+
+async fn apply_task_with_retry<T>(
+    client: &JobManageSyncClient,
+    transport: &mut T,
+    identity: &TaskApplyIdentity,
+    patch: &TaskApplyPatch,
+) -> Result<crate::clients::job_manage::TaskApplyAck>
+where
+    T: JobManageTransport,
+{
+    let mut attempt = 0;
+
+    loop {
+        match client.apply_task(transport, identity, patch).await {
+            Ok(ack) => {
+                if attempt > 0 {
+                    info!(
+                        task_id = %identity.task_id,
+                        requested_state = ?patch.observed_state,
+                        applied_state = ?ack.observed_state,
+                        retries = attempt,
+                        max_attempts = transport_max_attempts(),
+                        "task apply recovered via duplicate-safe retry path"
+                    );
+                }
+                return Ok(ack);
+            }
+            Err(error) => match transport_retry_delay(attempt) {
+                Some(delay) => {
+                    attempt += 1;
+                    warn!(
+                        task_id = %identity.task_id,
+                        requested_state = ?patch.observed_state,
+                        failed_attempt = attempt,
+                        next_attempt = attempt + 1,
+                        max_attempts = transport_max_attempts(),
+                        delay_ms = delay.as_millis() as u64,
+                        error = %error,
+                        "task apply failed; retrying duplicate-safe write"
+                    );
+                    tokio::time::sleep(delay).await;
+                }
+                None => {
+                    warn!(
+                        task_id = %identity.task_id,
+                        requested_state = ?patch.observed_state,
+                        failed_attempt = attempt + 1,
+                        max_attempts = transport_max_attempts(),
+                        error = %error,
+                        "task apply failed; retry budget exhausted"
+                    );
+                    return Err(error);
+                }
+            },
+        }
+    }
 }
 
 fn parse_default_states(states: &[String]) -> Result<Vec<TaskObservedState>> {
@@ -210,6 +346,18 @@ fn parse_default_states(states: &[String]) -> Result<Vec<TaskObservedState>> {
         .iter()
         .map(|state| parse_state(state))
         .collect::<Result<Vec<_>>>()
+}
+
+fn task_query_states(states: &[String]) -> Result<Vec<TaskObservedState>> {
+    let mut states = parse_default_states(states)?;
+
+    for active_state in [TaskObservedState::Acknowledged, TaskObservedState::Running] {
+        if !states.contains(&active_state) {
+            states.push(active_state);
+        }
+    }
+
+    Ok(states)
 }
 
 fn parse_state(value: &str) -> Result<TaskObservedState> {
@@ -244,12 +392,33 @@ fn populated_field(value: Option<&str>) -> bool {
     value.is_some_and(|value| !value.is_empty())
 }
 
-fn failure_patch(error_message: String, now: &str) -> TaskApplyPatch {
+fn validation_failure_patch(error_message: String, updated_at: String) -> TaskApplyPatch {
     TaskApplyPatch {
         observed_state: Some(TaskObservedState::Failed),
-        finished_at: Some(now.to_string()),
         error_message: Some(error_message),
-        updated_at: Some(now.to_string()),
+        updated_at: Some(updated_at),
+        ..Default::default()
+    }
+}
+
+fn execution_failure_patch(error_message: String, finished_at: String) -> TaskApplyPatch {
+    TaskApplyPatch {
+        observed_state: Some(TaskObservedState::Failed),
+        finished_at: Some(finished_at.clone()),
+        error_message: Some(error_message),
+        updated_at: Some(finished_at),
+        ..Default::default()
+    }
+}
+
+fn execution_result_patch(result: ExecutionResult, finished_at: String) -> TaskApplyPatch {
+    TaskApplyPatch {
+        observed_state: Some(result.state),
+        finished_at: Some(finished_at.clone()),
+        stdout: Some(result.stdout),
+        stderr: Some(result.stderr),
+        exit_code: result.exit_code,
+        updated_at: Some(finished_at),
         ..Default::default()
     }
 }

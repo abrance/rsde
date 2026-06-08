@@ -93,6 +93,60 @@ async fn marks_timed_out_tasks_with_timeout_terminal_state() {
 }
 
 #[tokio::test]
+async fn preserves_partial_output_when_command_tasks_time_out() {
+    let task = TaskResource {
+        command_line: Some("sh".to_string()),
+        args: vec![
+            "-c".to_string(),
+            "printf 'cmd-out'; >&2 printf 'cmd-err'; sleep 2".to_string(),
+        ],
+        timeout_secs: Some(1),
+        ..task_resource(TaskType::Command)
+    };
+
+    let result = LocalTaskExecutor.execute(&task).await.unwrap();
+
+    assert_execution(
+        &result,
+        "cmd-out",
+        "cmd-err",
+        None,
+        TaskObservedState::Timeout,
+    );
+}
+
+#[tokio::test]
+async fn returns_spawn_failure_errors_with_explicit_spawn_classification() {
+    let task = TaskResource {
+        command_line: Some(format!("missing-command-{}", unique_suffix())),
+        ..task_resource(TaskType::Command)
+    };
+
+    let error = LocalTaskExecutor.execute(&task).await.unwrap_err();
+    let message = error.to_string();
+
+    assert!(
+        message.contains(&format!("task spawn failure for task {}", task.task_id)),
+        "unexpected error message: {message}"
+    );
+    assert!(message.contains(task.command_line.as_deref().unwrap()));
+}
+
+#[tokio::test]
+async fn rejects_script_tasks_missing_script_content_as_invalid_payload() {
+    let task = task_resource(TaskType::Script);
+
+    let error = LocalTaskExecutor.execute(&task).await.unwrap_err();
+    let message = error.to_string();
+
+    assert!(
+        message.contains(&format!("invalid task payload for task {}", task.task_id)),
+        "unexpected error message: {message}"
+    );
+    assert!(message.contains("script task missing script_content"));
+}
+
+#[tokio::test]
 async fn rejects_script_tasks_when_command_line_is_also_populated() {
     let task = TaskResource {
         script_content: Some("printf 'script-only'".to_string()),
@@ -101,12 +155,13 @@ async fn rejects_script_tasks_when_command_line_is_also_populated() {
     };
 
     let error = LocalTaskExecutor.execute(&task).await.unwrap_err();
+    let message = error.to_string();
 
     assert!(
-        error
-            .to_string()
-            .contains("script task cannot include command_line")
+        message.contains(&format!("invalid task payload for task {}", task.task_id)),
+        "unexpected error message: {message}"
     );
+    assert!(message.contains("script task cannot include command_line"));
 }
 
 #[tokio::test]
@@ -118,12 +173,27 @@ async fn rejects_command_tasks_when_script_content_is_also_populated() {
     };
 
     let error = LocalTaskExecutor.execute(&task).await.unwrap_err();
+    let message = error.to_string();
 
     assert!(
-        error
-            .to_string()
-            .contains("command task cannot include script_content")
+        message.contains(&format!("invalid task payload for task {}", task.task_id)),
+        "unexpected error message: {message}"
     );
+    assert!(message.contains("command task cannot include script_content"));
+}
+
+#[tokio::test]
+async fn rejects_command_tasks_missing_command_line_as_invalid_payload() {
+    let task = task_resource(TaskType::Command);
+
+    let error = LocalTaskExecutor.execute(&task).await.unwrap_err();
+    let message = error.to_string();
+
+    assert!(
+        message.contains(&format!("invalid task payload for task {}", task.task_id)),
+        "unexpected error message: {message}"
+    );
+    assert!(message.contains("command task missing command_line"));
 }
 
 fn assert_execution(
