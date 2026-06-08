@@ -1,9 +1,11 @@
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
+use tracing::{info, warn};
 
 use crate::{
     clients::victoria_metrics::{VictoriaMetricsClient, VictoriaMetricsTransport},
     registration::{AgentIdentity, AgentRuntimeState},
+    retry::{retry_blocking_transport_with_diagnostic, transport_max_attempts},
 };
 
 const HEARTBEAT_MEASUREMENT: &str = "rsagent_heartbeat";
@@ -23,7 +25,16 @@ pub enum HeartbeatTick {
 pub struct HeartbeatReporter<T> {
     transport: T,
     last_sent_at: Option<DateTime<Utc>>,
+    last_sent_scope: Option<HeartbeatScope>,
     degraded: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HeartbeatScope {
+    node_id: Option<String>,
+    data_link_id: String,
+    vm_base_url: String,
+    interval_secs: u64,
 }
 
 impl<T> HeartbeatReporter<T>
@@ -34,6 +45,7 @@ where
         Self {
             transport,
             last_sent_at: None,
+            last_sent_scope: None,
             degraded: false,
         }
     }
@@ -45,6 +57,7 @@ where
         agent_id: &str,
         identity: &AgentIdentity,
     ) -> Result<HeartbeatTick> {
+        let current_scope = heartbeat_scope(state);
         let config = match state.effective_config() {
             Some(config) => config,
             None => {
@@ -53,6 +66,21 @@ where
                 });
             }
         };
+
+        if self.last_sent_scope.as_ref() != current_scope.as_ref() {
+            if self.last_sent_scope.is_some() || self.degraded {
+                info!(
+                    node_id = ?state.local_node_id(),
+                    data_link_id = %config.heartbeat_config.data_link_id,
+                    vm_base_url = %config.heartbeat_config.vm_base_url,
+                    interval_secs = config.heartbeat_config.interval_secs,
+                    degraded_before_reset = self.degraded,
+                    "heartbeat scope changed; local schedule reset"
+                );
+            }
+            self.last_sent_at = None;
+            self.degraded = false;
+        }
 
         if let Some(last_sent_at) = self.last_sent_at {
             let elapsed = now.signed_duration_since(last_sent_at).num_seconds();
@@ -66,13 +94,31 @@ where
         let payload = build_heartbeat_payload(state, agent_id, identity, now)?;
         let client = VictoriaMetricsClient::new(config.heartbeat_config.vm_base_url.clone());
 
-        match client.write(&mut self.transport, &payload) {
+        let outcome = retry_blocking_transport_with_diagnostic("heartbeat_write", || {
+            client.write(&mut self.transport, &payload)
+        });
+
+        match outcome.result {
             Ok(()) => {
+                if self.degraded {
+                    info!(
+                        retries = outcome.diagnostic.retries,
+                        max_attempts = transport_max_attempts(),
+                        "heartbeat transport recovered; clearing degraded state"
+                    );
+                }
                 self.last_sent_at = Some(now);
+                self.last_sent_scope = current_scope;
                 self.degraded = false;
                 Ok(HeartbeatTick::Sent { payload })
             }
             Err(error) => {
+                warn!(
+                    retries = outcome.diagnostic.retries,
+                    max_attempts = transport_max_attempts(),
+                    error = %error,
+                    "heartbeat transport failed; reporter entering degraded state"
+                );
                 self.degraded = true;
                 Err(error)
             }
@@ -84,11 +130,18 @@ where
     }
 
     pub fn reset(&mut self) {
+        if self.last_sent_at.is_some() || self.last_sent_scope.is_some() || self.degraded {
+            info!("heartbeat reporter reset cleared local send schedule and degraded flag");
+        }
         self.last_sent_at = None;
+        self.last_sent_scope = None;
         self.degraded = false;
     }
 
     pub fn recover(&mut self) {
+        if self.degraded {
+            info!("heartbeat reporter manually cleared degraded flag without resetting schedule");
+        }
         self.degraded = false;
     }
 
@@ -121,6 +174,17 @@ pub fn build_heartbeat_payload(
             .timestamp_nanos_opt()
             .ok_or_else(|| anyhow!("invalid timestamp"))?,
     ))
+}
+
+fn heartbeat_scope(state: &AgentRuntimeState) -> Option<HeartbeatScope> {
+    let config = state.effective_config()?;
+
+    Some(HeartbeatScope {
+        node_id: state.local_node_id().map(ToString::to_string),
+        data_link_id: config.heartbeat_config.data_link_id.clone(),
+        vm_base_url: config.heartbeat_config.vm_base_url.clone(),
+        interval_secs: config.heartbeat_config.interval_secs,
+    })
 }
 
 fn escape_tag_value(value: &str) -> String {

@@ -30,7 +30,17 @@ async fn main() -> Result<()> {
     info!(agent_version = %identity.agent_version, agent_id = %agent_id, "rsagent starting");
 
     if !state.loops_enabled() {
-        warn!("subordinate loops disabled until nodemanage sync provides active runtime config");
+        warn!(
+            degraded = state.is_degraded(),
+            sync_error = ?state.last_sync_error(),
+            "subordinate loops disabled until nodemanage sync provides active runtime config"
+        );
+        if state.is_degraded() {
+            warn!(
+                sync_error = ?state.last_sync_error(),
+                "rsagent started in degraded mode and is waiting for recovery from nodemanage"
+            );
+        }
     }
 
     let mut heartbeat_reporter = HeartbeatReporter::new(ReqwestVictoriaMetricsTransport::default());
@@ -53,6 +63,11 @@ async fn main() -> Result<()> {
                     Ok(outcome) => {
                         let effects = effects_from_sync_outcome(&outcome);
                         if effects.reset_heartbeat {
+                            info!(
+                                config_version = ?state.config_version(),
+                                degraded = state.is_degraded(),
+                                "config sync requested heartbeat reset"
+                            );
                             heartbeat_reporter.reset();
                         }
 
@@ -72,6 +87,13 @@ async fn main() -> Result<()> {
                             }
                         }
 
+                        if state.is_degraded() && state.effective_config().is_none() {
+                            warn!(
+                                sync_error = ?state.last_sync_error(),
+                                "config sync tick left rsagent in startup degraded state without a last-good config"
+                            );
+                        }
+
                         info!(?outcome, degraded = state.is_degraded(), loops_enabled = state.loops_enabled(), sync_error = ?state.last_sync_error(), at = %now, "config sync tick completed");
                     }
                     Err(error) => error!(error = %error, "config sync tick failed"),
@@ -88,7 +110,13 @@ async fn main() -> Result<()> {
                 }
 
                 match heartbeat_reporter.tick(chrono::Utc::now(), &state, &agent_id, &identity) {
-                    Ok(tick) => info!(?tick, "heartbeat tick completed"),
+                    Ok(tick) => {
+                        if heartbeat_reporter.is_degraded() {
+                            info!(?tick, "heartbeat tick completed while reporter remains degraded");
+                        } else {
+                            info!(?tick, "heartbeat tick completed");
+                        }
+                    }
                     Err(error) => error!(error = %error, "heartbeat tick failed"),
                 }
             }
