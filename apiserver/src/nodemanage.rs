@@ -451,7 +451,9 @@ fn node_error(error: NodeManageError) -> (StatusCode, Json<NodeResponse>) {
         | NodeManageError::InstallTaskNotFound(_)
         | NodeManageError::BindingNotFound(_)
         | NodeManageError::TargetAgentNotFound(_) => StatusCode::NOT_FOUND,
-        NodeManageError::RebindTargetAlreadyBound(_) => StatusCode::CONFLICT,
+        NodeManageError::Conflict(_) | NodeManageError::RebindTargetAlreadyBound(_) => {
+            StatusCode::CONFLICT
+        }
         NodeManageError::InvalidRebindRequest(_) | NodeManageError::InvalidInput(_) => {
             StatusCode::BAD_REQUEST
         }
@@ -720,7 +722,9 @@ async fn sync_agent(
         .sync_agent(req)
         .await
         .map(|mut response| {
-            if let Some(heartbeat_data_link_id) = state.heartbeat_data_link_id.as_ref() {
+            if response.accepted
+                && let Some(heartbeat_data_link_id) = state.heartbeat_data_link_id.as_ref()
+            {
                 response.heartbeat_config.data_link_id = heartbeat_data_link_id.clone();
                 response.heartbeat_config.interval_secs = state.config.heartbeat.interval_seconds;
             }
@@ -736,7 +740,9 @@ async fn sync_agent(
                 | NodeManageError::InstallTaskNotFound(_)
                 | NodeManageError::BindingNotFound(_)
                 | NodeManageError::TargetAgentNotFound(_) => StatusCode::NOT_FOUND,
-                NodeManageError::RebindTargetAlreadyBound(_) => StatusCode::CONFLICT,
+                NodeManageError::Conflict(_) | NodeManageError::RebindTargetAlreadyBound(_) => {
+                    StatusCode::CONFLICT
+                }
                 NodeManageError::InvalidRebindRequest(_) | NodeManageError::InvalidInput(_) => {
                     StatusCode::BAD_REQUEST
                 }
@@ -952,7 +958,9 @@ async fn v1_sync_agent(
         .sync_agent(req)
         .await
         .map(|mut data| {
-            if let Some(heartbeat_data_link_id) = state.heartbeat_data_link_id.as_ref() {
+            if data.accepted
+                && let Some(heartbeat_data_link_id) = state.heartbeat_data_link_id.as_ref()
+            {
                 data.heartbeat_config.data_link_id = heartbeat_data_link_id.clone();
                 data.heartbeat_config.interval_secs = state.config.heartbeat.interval_seconds;
             }
@@ -1015,6 +1023,23 @@ pub async fn create_v1_routes_with_shared_memory(
 ) -> anyhow::Result<Router> {
     let state = NodeManageState::new_with_shared_memory(config, Some(shared)).await?;
     Ok(build_v1_router(state))
+}
+
+pub async fn create_route_pair(
+    config: config::nodemanage::NodeManageConfig,
+) -> anyhow::Result<(Router, Router)> {
+    let state = NodeManageState::new(config).await?;
+
+    Ok((build_router(state.clone()), build_v1_router(state)))
+}
+
+pub async fn create_route_pair_with_shared_memory(
+    config: config::nodemanage::NodeManageConfig,
+    shared: SharedMemoryRuntime,
+) -> anyhow::Result<(Router, Router)> {
+    let state = NodeManageState::new_with_shared_memory(config, Some(shared)).await?;
+
+    Ok((build_router(state.clone()), build_v1_router(state)))
 }
 
 fn build_router(state: NodeManageState) -> Router {

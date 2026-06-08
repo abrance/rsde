@@ -1223,6 +1223,146 @@ async fn nodemanage_sync_returns_explicit_unbound_rejection() {
 }
 
 #[tokio::test]
+async fn nodemanage_v1_sync_unbound_rejection_does_not_publish_runtime_config() {
+    let (app, _) = build_shared_memory_app().await;
+
+    let response = app
+        .oneshot(make_json_request(
+            Method::POST,
+            "/api/nm/v1/agents/sync",
+            json!({
+                "agent_id": "agent-route-1",
+                "node_id": null,
+                "agent_version": "0.1.0",
+                "hostname": "worker-route",
+                "os_family": "linux",
+                "os_distribution": "ubuntu",
+                "arch": "x86_64",
+                "capabilities": ["script", "command"],
+                "started_at": "2026-05-29T10:00:00Z",
+                "config_version": "cfg-agent-local"
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["data"]["accepted"], false);
+    assert_eq!(body["data"]["bound_node_id"], "");
+    assert_eq!(body["data"]["binding_state"], "unbound");
+    assert_eq!(body["data"]["agent_run_mode"], "idle");
+    assert_eq!(body["data"]["config_version"], "");
+    assert_eq!(
+        body["data"]["heartbeat_config"],
+        json!({
+            "version": "",
+            "data_link_id": "",
+            "vm_base_url": "",
+            "interval_secs": 0
+        })
+    );
+    assert_eq!(
+        body["data"]["job_manage_config"],
+        json!({
+            "version": "",
+            "base_url": "",
+            "task_filter_defaults": {
+                "states": []
+            }
+        })
+    );
+    assert_eq!(body["data"]["sync_interval_secs"], 0);
+    assert_eq!(body["data"]["task_sync_interval_secs"], 0);
+    assert_eq!(
+        body["data"]["rejection_reason"],
+        "node_id is required for initial sync"
+    );
+}
+
+#[tokio::test]
+async fn nodemanage_v1_sync_conflict_returns_authoritative_bound_node_without_runtime_config() {
+    let (app, _) = build_shared_memory_app().await;
+
+    let initial = app
+        .clone()
+        .oneshot(make_json_request(
+            Method::POST,
+            "/api/nm/v1/agents/sync",
+            json!({
+                "agent_id": "agent-route-1",
+                "node_id": "node-route-1",
+                "agent_version": "0.1.0",
+                "hostname": "worker-route",
+                "os_family": "linux",
+                "os_distribution": "ubuntu",
+                "arch": "x86_64",
+                "capabilities": ["script", "command"],
+                "started_at": "2026-05-29T10:00:00Z",
+                "config_version": null
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(initial.status(), StatusCode::OK);
+
+    let conflict = app
+        .oneshot(make_json_request(
+            Method::POST,
+            "/api/nm/v1/agents/sync",
+            json!({
+                "agent_id": "agent-route-1",
+                "node_id": "node-route-2",
+                "agent_version": "0.1.0",
+                "hostname": "worker-route",
+                "os_family": "linux",
+                "os_distribution": "ubuntu",
+                "arch": "x86_64",
+                "capabilities": ["script", "command"],
+                "started_at": "2026-05-29T10:00:00Z",
+                "config_version": "cfg-agent-local"
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(conflict.status(), StatusCode::OK);
+    let body = read_json(conflict).await;
+    assert_eq!(body["success"], true);
+    assert_eq!(body["data"]["accepted"], false);
+    assert_eq!(body["data"]["bound_node_id"], "node-route-1");
+    assert_eq!(body["data"]["binding_state"], "conflict");
+    assert_eq!(body["data"]["agent_run_mode"], "idle");
+    assert_eq!(body["data"]["config_version"], "");
+    assert_eq!(
+        body["data"]["heartbeat_config"],
+        json!({
+            "version": "",
+            "data_link_id": "",
+            "vm_base_url": "",
+            "interval_secs": 0
+        })
+    );
+    assert_eq!(
+        body["data"]["job_manage_config"],
+        json!({
+            "version": "",
+            "base_url": "",
+            "task_filter_defaults": {
+                "states": []
+            }
+        })
+    );
+    assert_eq!(body["data"]["sync_interval_secs"], 0);
+    assert_eq!(body["data"]["task_sync_interval_secs"], 0);
+    assert_eq!(
+        body["data"]["rejection_reason"],
+        "agent agent-route-1 is already bound to node node-route-1"
+    );
+}
+
+#[tokio::test]
 async fn nodemanage_sync_route_replaces_legacy_register_route() {
     let app = apiserver::nodemanage::create_routes(config::nodemanage::NodeManageConfig::default())
         .await

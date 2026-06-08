@@ -150,7 +150,7 @@ fn install_status_exposes_waiting_register_state() {
 }
 
 #[tokio::test]
-async fn ssh_installer_executes_plan_and_returns_registered_on_successful_wait() {
+async fn ssh_installer_records_installing_then_installed_metadata_on_successful_wait() {
     let executor = RecordingExecutor::default();
     let calls = executor.calls.clone();
     let installer = SshRsAgentInstaller::new(
@@ -182,26 +182,30 @@ async fn ssh_installer_executes_plan_and_returns_registered_on_successful_wait()
 
     assert_eq!(result.status, InstallStatus::Registered);
     let calls = calls.lock().unwrap();
-    assert_eq!(calls.len(), 1);
+    assert_eq!(calls.len(), 2);
     let rendered: AgentRuntimeConfig = toml::from_str(&calls[0].2).unwrap();
     assert_eq!(
         rendered.nodemanage_sync_url,
         "http://127.0.0.1:3000/api/nm/v1/agents/sync"
     );
     assert_eq!(rendered.agent_id, INSTALLER_AGENT_ID_PLACEHOLDER);
+    assert_eq!(rendered.node_id, None);
     assert_eq!(rendered.data_dir, "/opt/rsagent");
     assert!(!calls[0].2.contains("register_callback_url"));
-    assert!(
-        calls[0]
-            .3
-            .contains("rsagent_version = \"rsagent-1.2.3.tar.gz\"")
-    );
+    let first_metadata = InstallMetadata::from_install_conf(&calls[0].3).unwrap();
+    assert_eq!(first_metadata.rsagent_version, "rsagent-1.2.3.tar.gz");
+    assert_eq!(first_metadata.status, InstallMetadataStatus::Installing);
+    let final_metadata = InstallMetadata::from_install_conf(&calls[1].3).unwrap();
+    assert_eq!(final_metadata.status, InstallMetadataStatus::Installed);
 }
 
 #[tokio::test]
-async fn ssh_installer_returns_failed_when_registration_wait_fails() {
+async fn ssh_installer_returns_waiting_register_and_keeps_installing_metadata_when_registration_wait_fails()
+ {
+    let executor = RecordingExecutor::default();
+    let calls = executor.calls.clone();
     let installer = SshRsAgentInstaller::new(
-        Arc::new(RecordingExecutor::default()),
+        Arc::new(executor),
         Arc::new(StaticWaiter {
             result: Err(nodemanage::NodeManageError::Storage("timeout".to_string())),
         }),
@@ -225,8 +229,68 @@ async fn ssh_installer_returns_failed_when_registration_wait_fails() {
         .await
         .unwrap();
 
-    assert_eq!(result.status, InstallStatus::Failed);
-    assert!(result.message.unwrap().contains("timeout"));
+    assert_eq!(result.status, InstallStatus::WaitingRegister);
+    assert!(
+        result
+            .message
+            .unwrap()
+            .contains("registration was not observed before timeout")
+    );
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    let first_metadata = InstallMetadata::from_install_conf(&calls[0].3).unwrap();
+    assert_eq!(first_metadata.status, InstallMetadataStatus::Installing);
+    let final_metadata = InstallMetadata::from_install_conf(&calls[1].3).unwrap();
+    assert_eq!(final_metadata.status, InstallMetadataStatus::Installing);
+}
+
+#[tokio::test]
+async fn ssh_installer_repair_path_keeps_bootstrap_runtime_config_for_first_sync() {
+    let existing_install_conf = InstallMetadata {
+        rsagent_version: "rsagent-1.2.3.tar.gz".to_string(),
+        plugins: vec![],
+        status: InstallMetadataStatus::Failed,
+        updated_at: "2026-05-25T12:00:00Z".to_string(),
+    }
+    .to_install_conf()
+    .unwrap();
+    let executor = RecordingExecutor {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        existing_install_conf: Some(existing_install_conf),
+    };
+    let calls = executor.calls.clone();
+    let installer = SshRsAgentInstaller::new(
+        Arc::new(executor),
+        Arc::new(StaticWaiter { result: Ok(()) }),
+        vec![],
+        30,
+    );
+
+    let result = installer
+        .install(InstallNodeRequest {
+            host: "10.0.0.8".to_string(),
+            ssh_port: 22,
+            username: "root".to_string(),
+            password: Some("secret".to_string()),
+            private_key: None,
+            rsagent_package_url: "https://example.com/rsagent-1.2.3.tar.gz".to_string(),
+            install_root: "/opt/rsagent".to_string(),
+            register_callback_url: "http://127.0.0.1:3000/api/nm/v1/agents/sync".to_string(),
+            plugins: vec![],
+            labels: vec![],
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(result.status, InstallStatus::Registered);
+    let calls = calls.lock().unwrap();
+    let rendered: AgentRuntimeConfig = toml::from_str(&calls[0].2).unwrap();
+    assert_eq!(rendered.agent_id, INSTALLER_AGENT_ID_PLACEHOLDER);
+    assert_eq!(rendered.node_id, None);
+    assert_eq!(rendered.data_dir, "/opt/rsagent");
+    let first_metadata = InstallMetadata::from_install_conf(&calls[0].3).unwrap();
+    assert_eq!(first_metadata.status, InstallMetadataStatus::Installing);
 }
 
 #[test]
@@ -274,6 +338,22 @@ fn runtime_config_contains_sync_bootstrap_fields() {
     assert_eq!(parsed.agent_id, INSTALLER_AGENT_ID_PLACEHOLDER);
     assert_eq!(parsed.data_dir, "/opt/rsagent");
     assert!(!rendered.contains("register_callback_url"));
+}
+
+#[test]
+fn runtime_config_normalizes_legacy_agent_sync_callback_to_v1_sync_route() {
+    let config = InstallRuntimeConfig::new(
+        "/opt/rsagent".to_string(),
+        "http://127.0.0.1:3000/api/nodes/agent/sync".to_string(),
+    );
+
+    let rendered = config.render().unwrap();
+    let parsed: AgentRuntimeConfig = toml::from_str(&rendered).unwrap();
+
+    assert_eq!(
+        parsed.nodemanage_sync_url,
+        "http://127.0.0.1:3000/api/nm/v1/agents/sync"
+    );
 }
 
 #[test]

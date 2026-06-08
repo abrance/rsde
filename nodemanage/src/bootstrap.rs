@@ -93,6 +93,10 @@ fn normalize_sync_url(raw: &str) -> String {
         return trimmed.to_string();
     }
 
+    if let Some(base) = trimmed.strip_suffix("/api/nodes/agent/sync") {
+        return format!("{base}/api/nm/v1/agents/sync");
+    }
+
     if let Some(base) = trimmed.strip_suffix("/api/nodes/agent/register") {
         return format!("{base}/api/nm/v1/agents/sync");
     }
@@ -387,6 +391,27 @@ impl SshRsAgentInstaller {
     fn rsagent_version_from_url(url: &str) -> String {
         url.rsplit('/').next().unwrap_or(url).to_string()
     }
+
+    fn build_install_metadata(
+        rsagent_version: String,
+        plugins: Vec<InstallPlugin>,
+        status: InstallMetadataStatus,
+    ) -> Result<String> {
+        InstallMetadata {
+            rsagent_version,
+            plugins,
+            status,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        }
+        .to_install_conf()
+    }
+
+    fn install_conf_update_steps(install_root: &str) -> Vec<InstallStep> {
+        vec![
+            InstallStep::EnsureDirectory(install_root.to_string()),
+            InstallStep::WriteInstallConf,
+        ]
+    }
 }
 
 #[async_trait]
@@ -414,6 +439,7 @@ impl RsAgentInstaller for SshRsAgentInstaller {
             &Self::rsagent_version_from_url(&request.rsagent_package_url),
             &plugins,
         );
+        let rsagent_version = Self::rsagent_version_from_url(&request.rsagent_package_url);
 
         let runtime_config = InstallRuntimeConfig::new(
             request.install_root.clone(),
@@ -421,16 +447,18 @@ impl RsAgentInstaller for SshRsAgentInstaller {
         )
         .render()?;
 
-        let install_conf = InstallMetadata {
-            rsagent_version: Self::rsagent_version_from_url(&request.rsagent_package_url),
-            plugins: plugins.clone(),
-            status: InstallMetadataStatus::Installed,
-            updated_at: chrono::Utc::now().to_rfc3339(),
-        }
-        .to_install_conf()?;
+        let install_conf = Self::build_install_metadata(
+            rsagent_version.clone(),
+            plugins.clone(),
+            InstallMetadataStatus::Installing,
+        )?;
 
         let steps = match decision {
-            InstallDecision::Skip => vec![InstallStep::WriteRuntimeConfig, InstallStep::StartAgent],
+            InstallDecision::Skip => vec![
+                InstallStep::WriteRuntimeConfig,
+                InstallStep::WriteInstallConf,
+                InstallStep::StartAgent,
+            ],
             _ => InstallStep::plan_for_fresh_install(
                 request.install_root.clone(),
                 request.rsagent_package_url.clone(),
@@ -442,24 +470,44 @@ impl RsAgentInstaller for SshRsAgentInstaller {
             .execute_install_plan(&connection, &steps, &runtime_config, &install_conf)
             .await?;
 
-        match self
+        let (status, metadata_status, message) = match self
             .waiter
             .wait_for_registration(&request.host, self.wait_timeout_secs)
             .await
         {
-            Ok(()) => Ok(InstallNodeResult {
-                install_id: Uuid::new_v4().to_string(),
-                host: request.host,
-                status: InstallStatus::Registered,
-                message: None,
-            }),
-            Err(err) => Ok(InstallNodeResult {
-                install_id: Uuid::new_v4().to_string(),
-                host: request.host,
-                status: InstallStatus::Failed,
-                message: Some(err.to_string()),
-            }),
-        }
+            Ok(()) => (
+                InstallStatus::Registered,
+                InstallMetadataStatus::Installed,
+                None,
+            ),
+            Err(err) => (
+                InstallStatus::WaitingRegister,
+                InstallMetadataStatus::Installing,
+                Some(format!(
+                    "registration was not observed before timeout for host {}: {}",
+                    request.host, err
+                )),
+            ),
+        };
+
+        let final_install_conf =
+            Self::build_install_metadata(rsagent_version, plugins, metadata_status)?;
+
+        self.executor
+            .execute_install_plan(
+                &connection,
+                &Self::install_conf_update_steps(&request.install_root),
+                "",
+                &final_install_conf,
+            )
+            .await?;
+
+        Ok(InstallNodeResult {
+            install_id: Uuid::new_v4().to_string(),
+            host: request.host,
+            status,
+            message,
+        })
     }
 }
 

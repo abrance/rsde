@@ -129,6 +129,11 @@ impl NodeManageError {
                     retryable: false,
                 }
             }
+            Self::Conflict(_message) => NodeManageApiError {
+                code: NodeManageErrorCode::BindingConflict,
+                message: self.to_string(),
+                retryable: false,
+            },
             Self::Storage(_) => NodeManageApiError {
                 code: NodeManageErrorCode::InternalError,
                 message: self.to_string(),

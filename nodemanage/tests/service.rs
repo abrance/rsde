@@ -588,6 +588,41 @@ async fn sync_initial_sync_without_node_id_returns_explicit_unbound_rejection() 
 }
 
 #[tokio::test]
+async fn sync_unbound_rejection_does_not_publish_accepted_runtime_config() {
+    let manager = manager();
+
+    let response = manager
+        .sync_agent(sync_request("agent-1", None, Some("cfg-agent-local")))
+        .await
+        .unwrap();
+
+    assert!(!response.accepted);
+    assert_eq!(response.bound_node_id, "");
+    assert_eq!(response.binding_state, SyncBindingState::Unbound);
+    assert_eq!(response.agent_run_mode, AgentRunMode::Idle);
+    assert_eq!(response.config_version, "");
+    assert_eq!(response.sync_interval_secs, 0);
+    assert_eq!(response.task_sync_interval_secs, 0);
+    assert_eq!(
+        response.heartbeat_config,
+        HeartbeatConfig {
+            version: String::new(),
+            data_link_id: String::new(),
+            vm_base_url: String::new(),
+            interval_secs: 0,
+        }
+    );
+    assert_eq!(
+        response.job_manage_config,
+        JobManageConfig {
+            version: String::new(),
+            base_url: String::new(),
+            task_filter_defaults: TaskFilterDefaults { states: vec![] },
+        }
+    );
+}
+
+#[tokio::test]
 async fn sync_conflict_binding_is_explicit_and_not_silently_overwritten() {
     let repository = MemoryNodeRepository::default();
     let manager = manager_with_repository(repository.clone());
@@ -616,6 +651,57 @@ async fn sync_conflict_binding_is_explicit_and_not_silently_overwritten() {
     let preserved_binding = reloaded_manager.agent_binding("agent-1").await.unwrap();
     assert_eq!(preserved_binding.node_id, "node-1");
     assert!(reloaded_manager.agent_binding("agent-2").await.is_none());
+}
+
+#[tokio::test]
+async fn sync_agent_conflict_preserves_authoritative_bound_node_id_without_runtime_config() {
+    let repository = MemoryNodeRepository::default();
+    let manager = manager_with_repository(repository.clone());
+
+    manager
+        .sync_agent(sync_request("agent-1", Some("node-1"), None))
+        .await
+        .unwrap();
+
+    let reloaded_manager = manager_with_repository(repository);
+    let response = reloaded_manager
+        .sync_agent(sync_request(
+            "agent-1",
+            Some("node-2"),
+            Some("cfg-agent-local"),
+        ))
+        .await
+        .unwrap();
+
+    assert!(!response.accepted);
+    assert_eq!(response.agent_id, "agent-1");
+    assert_eq!(response.bound_node_id, "node-1");
+    assert_eq!(response.binding_state, SyncBindingState::Conflict);
+    assert_eq!(response.agent_run_mode, AgentRunMode::Idle);
+    assert_eq!(response.config_version, "");
+    assert_eq!(response.sync_interval_secs, 0);
+    assert_eq!(response.task_sync_interval_secs, 0);
+    assert_eq!(
+        response.heartbeat_config,
+        HeartbeatConfig {
+            version: String::new(),
+            data_link_id: String::new(),
+            vm_base_url: String::new(),
+            interval_secs: 0,
+        }
+    );
+    assert_eq!(
+        response.job_manage_config,
+        JobManageConfig {
+            version: String::new(),
+            base_url: String::new(),
+            task_filter_defaults: TaskFilterDefaults { states: vec![] },
+        }
+    );
+    assert_eq!(
+        response.rejection_reason,
+        Some("agent agent-1 is already bound to node node-1".to_string())
+    );
 }
 
 #[tokio::test]

@@ -575,26 +575,20 @@ where
             bound_node_id,
             binding_state,
             agent_run_mode: AgentRunMode::Idle,
-            config_version: DEFAULT_CONFIG_VERSION.to_string(),
+            config_version: String::new(),
             heartbeat_config: HeartbeatConfig {
-                version: DEFAULT_HEARTBEAT_CONFIG_VERSION.to_string(),
-                data_link_id: DEFAULT_HEARTBEAT_DATA_LINK_ID.to_string(),
-                vm_base_url: DEFAULT_HEARTBEAT_VM_BASE_URL.to_string(),
-                interval_secs: DEFAULT_HEARTBEAT_INTERVAL_SECS,
+                version: String::new(),
+                data_link_id: String::new(),
+                vm_base_url: String::new(),
+                interval_secs: 0,
             },
             job_manage_config: JobManageConfig {
-                version: DEFAULT_JOB_MANAGE_CONFIG_VERSION.to_string(),
-                base_url: DEFAULT_JOB_MANAGE_BASE_URL.to_string(),
-                task_filter_defaults: TaskFilterDefaults {
-                    states: vec![
-                        "queued".to_string(),
-                        "acknowledged".to_string(),
-                        "running".to_string(),
-                    ],
-                },
+                version: String::new(),
+                base_url: String::new(),
+                task_filter_defaults: TaskFilterDefaults { states: vec![] },
             },
-            sync_interval_secs: DEFAULT_SYNC_INTERVAL_SECS,
-            task_sync_interval_secs: DEFAULT_TASK_SYNC_INTERVAL_SECS,
+            sync_interval_secs: 0,
+            task_sync_interval_secs: 0,
             rejection_reason: Some(rejection_reason),
         }
     }
