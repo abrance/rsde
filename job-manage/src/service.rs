@@ -118,7 +118,13 @@ impl TaskSyncService {
                 None => true,
             })
             .cloned()
-            .collect();
+            .collect::<Vec<_>>();
+
+        if query.requests_active_candidates()
+            && let Some(task) = select_active_task_candidate(&filtered)
+        {
+            return Ok(vec![task]);
+        }
 
         Ok(filtered)
     }
@@ -210,6 +216,11 @@ fn map_node_error(err: NodeManageError) -> JobManageError {
 }
 
 fn apply_task_patch(task: &mut TaskResource, patch: &TaskApplyPatch) -> Result<()> {
+    if patch.observed_state == Some(task.observed_state) {
+        apply_missing_task_patch_fields(task, patch);
+        return Ok(());
+    }
+
     if let Some(observed_state) = patch.observed_state
         && observed_state != task.observed_state
     {
@@ -242,4 +253,70 @@ fn apply_task_patch(task: &mut TaskResource, patch: &TaskApplyPatch) -> Result<(
     }
 
     Ok(())
+}
+
+fn apply_missing_task_patch_fields(task: &mut TaskResource, patch: &TaskApplyPatch) {
+    if task.claimed_at.is_none() {
+        task.claimed_at = patch.claimed_at.clone();
+    }
+    if task.started_at.is_none() {
+        task.started_at = patch.started_at.clone();
+    }
+    if task.finished_at.is_none() {
+        task.finished_at = patch.finished_at.clone();
+    }
+    if task.stdout.is_none() {
+        task.stdout = patch.stdout.clone();
+    }
+    if task.stderr.is_none() {
+        task.stderr = patch.stderr.clone();
+    }
+    if task.exit_code.is_none() {
+        task.exit_code = patch.exit_code;
+    }
+    if task.error_message.is_none() {
+        task.error_message = patch.error_message.clone();
+    }
+    if task.updated_at.is_none() {
+        task.updated_at = patch.updated_at.clone();
+    }
+}
+
+impl TaskListQuery {
+    fn requests_active_candidates(&self) -> bool {
+        !self.states.is_empty() && self.states.iter().any(|state| !state.is_terminal())
+    }
+}
+
+fn select_active_task_candidate(tasks: &[TaskResource]) -> Option<TaskResource> {
+    tasks
+        .iter()
+        .filter(|task| !task.observed_state.is_terminal())
+        .max_by(|left, right| compare_task_candidates(left, right))
+        .cloned()
+}
+
+fn compare_task_candidates(left: &TaskResource, right: &TaskResource) -> std::cmp::Ordering {
+    active_task_priority(left.observed_state)
+        .cmp(&active_task_priority(right.observed_state))
+        .then_with(|| compare_candidate_updated_at(left, right))
+        .then_with(|| right.task_id.cmp(&left.task_id))
+}
+
+fn compare_candidate_updated_at(left: &TaskResource, right: &TaskResource) -> std::cmp::Ordering {
+    match (left.updated_at.as_deref(), right.updated_at.as_deref()) {
+        (Some(left), Some(right)) => right.cmp(left),
+        (Some(_), None) => std::cmp::Ordering::Greater,
+        (None, Some(_)) => std::cmp::Ordering::Less,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+}
+
+fn active_task_priority(state: TaskObservedState) -> u8 {
+    match state {
+        TaskObservedState::Running => 3,
+        TaskObservedState::Acknowledged => 2,
+        TaskObservedState::Queued => 1,
+        TaskObservedState::Succeeded | TaskObservedState::Failed | TaskObservedState::Timeout => 0,
+    }
 }

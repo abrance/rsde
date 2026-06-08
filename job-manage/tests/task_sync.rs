@@ -193,6 +193,171 @@ async fn list_filters_by_agent_node_states_and_updated_after() {
 }
 
 #[tokio::test]
+async fn list_returns_single_running_candidate_when_multiple_active_tasks_match() {
+    let service = TaskSyncService::new(vec![
+        sample_task(
+            "task-queued",
+            "agent-1",
+            "node-1",
+            TaskObservedState::Queued,
+            Some("2026-05-31T00:00:00Z"),
+        ),
+        sample_task(
+            "task-acknowledged",
+            "agent-1",
+            "node-1",
+            TaskObservedState::Acknowledged,
+            Some("2026-05-31T00:01:00Z"),
+        ),
+        sample_task(
+            "task-running",
+            "agent-1",
+            "node-1",
+            TaskObservedState::Running,
+            Some("2026-05-31T00:02:00Z"),
+        ),
+    ]);
+
+    let tasks = service
+        .list_tasks(&TaskListQuery {
+            agent_id: "agent-1".to_string(),
+            node_id: "node-1".to_string(),
+            states: vec![
+                TaskObservedState::Queued,
+                TaskObservedState::Acknowledged,
+                TaskObservedState::Running,
+            ],
+            updated_after: None,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].task_id, "task-running");
+}
+
+#[tokio::test]
+async fn list_returns_oldest_queued_candidate_before_newer_queued_work() {
+    let service = TaskSyncService::new(vec![
+        sample_task(
+            "task-older",
+            "agent-1",
+            "node-1",
+            TaskObservedState::Queued,
+            Some("2026-05-31T00:00:00Z"),
+        ),
+        sample_task(
+            "task-newer",
+            "agent-1",
+            "node-1",
+            TaskObservedState::Queued,
+            Some("2026-05-31T00:01:00Z"),
+        ),
+    ]);
+
+    let tasks = service
+        .list_tasks(&TaskListQuery {
+            agent_id: "agent-1".to_string(),
+            node_id: "node-1".to_string(),
+            states: vec![TaskObservedState::Queued],
+            updated_after: None,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].task_id, "task-older");
+}
+
+#[tokio::test]
+async fn list_applies_updated_after_before_returning_single_candidate() {
+    let service = TaskSyncService::new(vec![
+        sample_task(
+            "task-running-old",
+            "agent-1",
+            "node-1",
+            TaskObservedState::Running,
+            Some("2026-05-31T00:00:00Z"),
+        ),
+        sample_task(
+            "task-queued-new",
+            "agent-1",
+            "node-1",
+            TaskObservedState::Queued,
+            Some("2026-05-31T00:02:00Z"),
+        ),
+        sample_task(
+            "task-acknowledged-new",
+            "agent-1",
+            "node-1",
+            TaskObservedState::Acknowledged,
+            Some("2026-05-31T00:03:00Z"),
+        ),
+    ]);
+
+    let tasks = service
+        .list_tasks(&TaskListQuery {
+            agent_id: "agent-1".to_string(),
+            node_id: "node-1".to_string(),
+            states: vec![
+                TaskObservedState::Queued,
+                TaskObservedState::Acknowledged,
+                TaskObservedState::Running,
+            ],
+            updated_after: Some("2026-05-31T00:01:00Z".to_string()),
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].task_id, "task-acknowledged-new");
+}
+
+#[tokio::test]
+async fn list_returns_single_active_candidate_even_with_terminal_states_in_filter() {
+    let service = TaskSyncService::new(vec![
+        sample_task(
+            "task-succeeded",
+            "agent-1",
+            "node-1",
+            TaskObservedState::Succeeded,
+            Some("2026-05-31T00:03:00Z"),
+        ),
+        sample_task(
+            "task-queued",
+            "agent-1",
+            "node-1",
+            TaskObservedState::Queued,
+            Some("2026-05-31T00:02:00Z"),
+        ),
+        sample_task(
+            "task-running",
+            "agent-1",
+            "node-1",
+            TaskObservedState::Running,
+            Some("2026-05-31T00:01:00Z"),
+        ),
+    ]);
+
+    let tasks = service
+        .list_tasks(&TaskListQuery {
+            agent_id: "agent-1".to_string(),
+            node_id: "node-1".to_string(),
+            states: vec![
+                TaskObservedState::Queued,
+                TaskObservedState::Running,
+                TaskObservedState::Succeeded,
+            ],
+            updated_after: None,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].task_id, "task-running");
+}
+
+#[tokio::test]
 async fn apply_updates_only_fields_present_in_partial_patch() {
     let mut task = sample_task(
         "task-apply",
@@ -270,6 +435,83 @@ async fn repeated_apply_with_same_payload_is_idempotent() {
 }
 
 #[tokio::test]
+async fn repeated_acknowledged_apply_preserves_existing_claim_snapshot() {
+    let mut task = sample_task(
+        "task-acknowledged-idempotent",
+        "agent-1",
+        "node-1",
+        TaskObservedState::Acknowledged,
+        Some("2026-05-31T00:01:00Z"),
+    );
+    task.claimed_at = Some("2026-05-31T00:01:00Z".to_string());
+
+    let service = TaskSyncService::new(vec![task]);
+    let identity = TaskApplyIdentity {
+        task_id: "task-acknowledged-idempotent".to_string(),
+        agent_id: "agent-1".to_string(),
+        node_id: "node-1".to_string(),
+    };
+    let request = TaskApplyRequest {
+        patch: TaskApplyPatch {
+            observed_state: Some(TaskObservedState::Acknowledged),
+            claimed_at: Some("2026-05-31T00:05:00Z".to_string()),
+            updated_at: Some("2026-05-31T00:05:00Z".to_string()),
+            ..Default::default()
+        },
+        rejected_fields: vec![],
+    };
+
+    let first = service
+        .apply_task(&identity, request.clone())
+        .await
+        .unwrap();
+    let second = service.apply_task(&identity, request).await.unwrap();
+
+    assert_eq!(first.claimed_at.as_deref(), Some("2026-05-31T00:01:00Z"));
+    assert_eq!(first.updated_at.as_deref(), Some("2026-05-31T00:01:00Z"));
+    assert_eq!(second, first);
+}
+
+#[tokio::test]
+async fn repeated_running_apply_preserves_existing_start_snapshot() {
+    let mut task = sample_task(
+        "task-running-idempotent",
+        "agent-1",
+        "node-1",
+        TaskObservedState::Running,
+        Some("2026-05-31T00:02:00Z"),
+    );
+    task.claimed_at = Some("2026-05-31T00:01:00Z".to_string());
+    task.started_at = Some("2026-05-31T00:02:00Z".to_string());
+
+    let service = TaskSyncService::new(vec![task]);
+    let identity = TaskApplyIdentity {
+        task_id: "task-running-idempotent".to_string(),
+        agent_id: "agent-1".to_string(),
+        node_id: "node-1".to_string(),
+    };
+    let request = TaskApplyRequest {
+        patch: TaskApplyPatch {
+            observed_state: Some(TaskObservedState::Running),
+            started_at: Some("2026-05-31T00:06:00Z".to_string()),
+            updated_at: Some("2026-05-31T00:06:00Z".to_string()),
+            ..Default::default()
+        },
+        rejected_fields: vec![],
+    };
+
+    let first = service
+        .apply_task(&identity, request.clone())
+        .await
+        .unwrap();
+    let second = service.apply_task(&identity, request).await.unwrap();
+
+    assert_eq!(first.started_at.as_deref(), Some("2026-05-31T00:02:00Z"));
+    assert_eq!(first.updated_at.as_deref(), Some("2026-05-31T00:02:00Z"));
+    assert_eq!(second, first);
+}
+
+#[tokio::test]
 async fn apply_rejects_server_owned_fields() {
     let service = TaskSyncService::new(vec![sample_task(
         "task-server-owned",
@@ -344,6 +586,92 @@ async fn apply_rejects_terminal_state_regression() {
             to: TaskObservedState::Running,
         })
     );
+}
+
+#[tokio::test]
+async fn repeated_terminal_apply_keeps_existing_terminal_snapshot_stable() {
+    let mut task = sample_task(
+        "task-terminal-stable",
+        "agent-1",
+        "node-1",
+        TaskObservedState::Succeeded,
+        Some("2026-05-31T00:03:00Z"),
+    );
+    task.stdout = Some("done".to_string());
+    task.stderr = Some(String::new());
+    task.exit_code = Some(0);
+    task.finished_at = Some("2026-05-31T00:03:00Z".to_string());
+    let original = task.clone();
+
+    let service = TaskSyncService::new(vec![task]);
+    let identity = TaskApplyIdentity {
+        task_id: "task-terminal-stable".to_string(),
+        agent_id: "agent-1".to_string(),
+        node_id: "node-1".to_string(),
+    };
+
+    let updated = service
+        .apply_task(
+            &identity,
+            TaskApplyRequest {
+                patch: TaskApplyPatch {
+                    observed_state: Some(TaskObservedState::Succeeded),
+                    stdout: Some("changed".to_string()),
+                    stderr: Some("changed stderr".to_string()),
+                    exit_code: Some(17),
+                    updated_at: Some("2026-05-31T00:05:00Z".to_string()),
+                    ..Default::default()
+                },
+                rejected_fields: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(updated, original);
+}
+
+#[tokio::test]
+async fn same_terminal_timeout_apply_backfills_missing_final_result_fields() {
+    let service = TaskSyncService::new(vec![sample_task(
+        "task-timeout-backfill",
+        "agent-1",
+        "node-1",
+        TaskObservedState::Timeout,
+        Some("2026-05-31T00:03:00Z"),
+    )]);
+    let identity = TaskApplyIdentity {
+        task_id: "task-timeout-backfill".to_string(),
+        agent_id: "agent-1".to_string(),
+        node_id: "node-1".to_string(),
+    };
+
+    let updated = service
+        .apply_task(
+            &identity,
+            TaskApplyRequest {
+                patch: TaskApplyPatch {
+                    observed_state: Some(TaskObservedState::Timeout),
+                    finished_at: Some("2026-05-31T00:03:00Z".to_string()),
+                    stderr: Some("deadline exceeded".to_string()),
+                    error_message: Some("task execution timed out".to_string()),
+                    updated_at: Some("2026-05-31T00:03:00Z".to_string()),
+                    ..Default::default()
+                },
+                rejected_fields: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(updated.observed_state, TaskObservedState::Timeout);
+    assert_eq!(updated.finished_at.as_deref(), Some("2026-05-31T00:03:00Z"));
+    assert_eq!(updated.stderr.as_deref(), Some("deadline exceeded"));
+    assert_eq!(
+        updated.error_message.as_deref(),
+        Some("task execution timed out")
+    );
+    assert_eq!(updated.updated_at.as_deref(), Some("2026-05-31T00:03:00Z"));
 }
 
 #[tokio::test]

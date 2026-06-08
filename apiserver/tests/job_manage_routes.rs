@@ -151,6 +151,98 @@ async fn get_tasks_filters_by_agent_node_states_and_updated_after() {
 }
 
 #[tokio::test]
+async fn get_tasks_returns_single_active_candidate_prioritizing_running_over_newer_queued() {
+    let app = build_app(vec![
+        sample_task(
+            "task-queued",
+            "agent-1",
+            "node-1",
+            TaskObservedState::Queued,
+            "2026-05-31T00:03:00Z",
+        ),
+        sample_task(
+            "task-acknowledged",
+            "agent-1",
+            "node-1",
+            TaskObservedState::Acknowledged,
+            "2026-05-31T00:02:00Z",
+        ),
+        sample_task(
+            "task-running",
+            "agent-1",
+            "node-1",
+            TaskObservedState::Running,
+            "2026-05-31T00:01:00Z",
+        ),
+    ]);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(
+                    "/api/job-manage/v1/tasks?agent_id=agent-1&node_id=node-1&states=queued,acknowledged,running",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response).await;
+    assert_eq!(body["data"]["items"].as_array().unwrap().len(), 1);
+    assert_eq!(body["data"]["items"][0]["task_id"], "task-running");
+    assert_eq!(body["data"]["items"][0]["observed_state"], "running");
+}
+
+#[tokio::test]
+async fn get_tasks_keeps_single_active_candidate_when_terminal_states_are_requested() {
+    let app = build_app(vec![
+        sample_task(
+            "task-succeeded",
+            "agent-1",
+            "node-1",
+            TaskObservedState::Succeeded,
+            "2026-05-31T00:03:00Z",
+        ),
+        sample_task(
+            "task-queued",
+            "agent-1",
+            "node-1",
+            TaskObservedState::Queued,
+            "2026-05-31T00:02:00Z",
+        ),
+        sample_task(
+            "task-running",
+            "agent-1",
+            "node-1",
+            TaskObservedState::Running,
+            "2026-05-31T00:01:00Z",
+        ),
+    ]);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(
+                    "/api/job-manage/v1/tasks?agent_id=agent-1&node_id=node-1&states=queued,running,succeeded",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response).await;
+    assert_eq!(body["data"]["items"].as_array().unwrap().len(), 1);
+    assert_eq!(body["data"]["items"][0]["task_id"], "task-running");
+    assert_eq!(body["data"]["items"][0]["observed_state"], "running");
+}
+
+#[tokio::test]
 async fn post_apply_uses_query_identity_and_partial_body_only() {
     let app = build_app(vec![sample_task(
         "task-apply",
@@ -411,4 +503,102 @@ async fn task_routes_persist_rsagent_style_terminal_updates() {
     assert_eq!(stored_body["data"]["items"][0]["stdout"], "done");
     assert_eq!(stored_body["data"]["items"][0]["exit_code"], 0);
     assert_eq!(stored_body["data"]["items"][0]["desired_state"], "queued");
+}
+
+#[tokio::test]
+async fn task_routes_expose_failed_result_fields_after_same_state_terminal_backfill() {
+    let app = build_app(vec![sample_task(
+        "task-failed-backfill",
+        "agent-1",
+        "node-1",
+        TaskObservedState::Failed,
+        "2026-05-31T00:03:00Z",
+    )]);
+
+    let apply = app
+        .clone()
+        .oneshot(make_json_request(
+            Method::POST,
+            "/api/job-manage/v1/tasks:apply?task_id=task-failed-backfill&agent_id=agent-1&node_id=node-1",
+            json!({
+                "observed_state": "failed",
+                "finished_at": "2026-05-31T00:03:00Z",
+                "stderr": "permission denied",
+                "exit_code": 126,
+                "error_message": "command exited with non-zero status",
+                "updated_at": "2026-05-31T00:03:00Z"
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(apply.status(), StatusCode::OK);
+
+    let stored = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/api/job-manage/v1/tasks?agent_id=agent-1&node_id=node-1&states=failed")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stored.status(), StatusCode::OK);
+    let stored_body = read_json(stored).await;
+    assert_eq!(stored_body["data"]["items"][0]["observed_state"], "failed");
+    assert_eq!(
+        stored_body["data"]["items"][0]["stderr"],
+        "permission denied"
+    );
+    assert_eq!(stored_body["data"]["items"][0]["exit_code"], 126);
+    assert_eq!(
+        stored_body["data"]["items"][0]["error_message"],
+        "command exited with non-zero status"
+    );
+    assert_eq!(
+        stored_body["data"]["items"][0]["finished_at"],
+        "2026-05-31T00:03:00Z"
+    );
+}
+
+#[tokio::test]
+async fn repeated_acknowledged_apply_returns_same_success_envelope() {
+    let mut task = sample_task(
+        "task-ack-route",
+        "agent-1",
+        "node-1",
+        TaskObservedState::Acknowledged,
+        "2026-05-31T00:01:00Z",
+    );
+    task.claimed_at = Some("2026-05-31T00:01:00Z".to_string());
+    let app = build_app(vec![task]);
+
+    let response = app
+        .oneshot(make_json_request(
+            Method::POST,
+            "/api/job-manage/v1/tasks:apply?task_id=task-ack-route&agent_id=agent-1&node_id=node-1",
+            json!({
+                "observed_state": "acknowledged",
+                "claimed_at": "2026-05-31T00:05:00Z",
+                "updated_at": "2026-05-31T00:05:00Z"
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = read_json(response).await;
+    assert_eq!(
+        body,
+        json!({
+            "success": true,
+            "data": {
+                "task_id": "task-ack-route",
+                "observed_state": "acknowledged",
+                "updated_at": "2026-05-31T00:01:00Z"
+            },
+            "error": null
+        })
+    );
 }
