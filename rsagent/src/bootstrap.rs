@@ -23,8 +23,14 @@ where
         &identity,
         state.config_version().map(ToString::to_string),
     );
-    let response = client.sync(transport, &request).await?;
-    state.apply_sync_response(response);
+    match client.sync(transport, &request).await {
+        Ok(response) => {
+            state.apply_sync_response(response);
+        }
+        Err(err) => {
+            state.record_bootstrap_sync_failure(err.to_string());
+        }
+    }
     Ok((state, identity))
 }
 
