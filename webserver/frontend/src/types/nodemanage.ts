@@ -1,6 +1,6 @@
 export type NodeOnlineStatus = 'online' | 'offline' | 'unknown'
 export type NodeBindingState = 'BOUND' | 'UNBOUND' | 'BINDING' | 'ERROR' | 'UNKNOWN'
-export type NodeInstallPhase = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'UNKNOWN'
+export type NodeInstallPhase = 'NOT_STARTED' | 'PENDING' | 'RUNNING' | 'COMPLETED' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN'
 
 export interface NodeRecord {
     id: string

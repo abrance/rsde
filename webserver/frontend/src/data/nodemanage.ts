@@ -44,6 +44,78 @@ type LegacyPaginated<T> = {
     total?: number
 }
 
+type V1NodeSummary = {
+    node_id: string
+    node_name: string
+    endpoint?: string
+    labels?: string[]
+    binding_state?: string
+    install_phase?: string
+    online_status?: string
+    updated_at?: string
+    last_heartbeat_at?: string | null
+}
+
+type V1NodeBaseInfo = {
+    node_id: string
+    node_name: string
+    endpoint?: string
+    labels?: string[]
+    updated_at?: string
+}
+
+type V1NodeBindingView = {
+    agent_id?: string
+    binding_state?: string
+}
+
+type V1NodeStatusView = {
+    binding_state?: string
+    install_phase?: string
+    online_status?: string
+    updated_at?: string
+    last_heartbeat_at?: string | null
+}
+
+type V1NodeInstallTaskView = {
+    install_task_id: string
+    task_state?: string
+    error_message?: string | null
+}
+
+type V1NodeDetail = {
+    node: V1NodeBaseInfo
+    binding?: V1NodeBindingView | null
+    status: V1NodeStatusView
+    latest_install_task?: V1NodeInstallTaskView | null
+}
+
+type RawNodeBinding = {
+    state?: string
+    agent_id?: string
+    binding_state?: string
+}
+
+type InstallTaskPayload =
+    | InstallTask
+    | {
+          id?: string
+          status?: string
+          message?: string
+          install_task_id?: string
+          task_state?: string
+          error_message?: string | null
+      }
+
+type InstallReceiptPayload = {
+    id?: string
+    status?: string
+    message?: string
+    install_task_id?: string
+    task_state?: string
+    error_message?: string | null
+}
+
 function toErrorMessage(error: ApiEnvelope<unknown>['error'], fallback: string): string {
     if (!error) return fallback
     if (typeof error === 'string') return error
@@ -101,36 +173,67 @@ async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
 
 function parseOnlineStatus(val: string | undefined): NodeOnlineStatus | undefined {
     if (val === 'online' || val === 'offline' || val === 'unknown') return val
+    if (val === 'maintenance') return 'unknown'
     return undefined
 }
 
 function parseBindingState(val: string | undefined): NodeBindingState | undefined {
     if (val === 'BOUND' || val === 'UNBOUND' || val === 'BINDING' || val === 'ERROR' || val === 'UNKNOWN') return val
+    if (val === 'bound') return 'BOUND'
+    if (val === 'unbound') return 'UNBOUND'
+    if (val === 'binding') return 'BINDING'
+    if (val === 'error') return 'ERROR'
+    if (val === 'unknown') return 'UNKNOWN'
     return undefined
 }
 
 function parseInstallPhase(val: string | undefined): NodeInstallPhase | undefined {
     if (val === 'PENDING' || val === 'RUNNING' || val === 'COMPLETED' || val === 'FAILED' || val === 'UNKNOWN') return val
+    if (val === 'pending' || val === 'not_started') return 'PENDING'
+    if (val === 'running') return 'RUNNING'
+    if (val === 'completed' || val === 'succeeded') return 'COMPLETED'
+    if (val === 'failed') return 'FAILED'
+    if (val === 'unknown') return 'UNKNOWN'
     return undefined
 }
 
-function mapLegacyNode(node: LegacyNode): NodeRecord {
+function mapNodeRecord(node: LegacyNode | V1NodeSummary | V1NodeBaseInfo, status?: V1NodeStatusView): NodeRecord {
+    const rawId = 'node_id' in node ? node.node_id : node.id
+    const rawName = 'node_name' in node ? node.node_name : node.name
+    const rawEndpoint = 'endpoint' in node ? node.endpoint : undefined
+    const rawLabels = 'labels' in node ? node.labels : undefined
+    const rawBindingState = status?.binding_state ?? ('binding_state' in node ? node.binding_state : undefined)
+    const rawInstallPhase = status?.install_phase ?? ('install_phase' in node ? node.install_phase : undefined)
+    const rawOnlineStatus = status?.online_status ?? ('online_status' in node ? node.online_status : 'status' in node ? node.status : undefined)
+    const rawUpdatedAt = status?.updated_at ?? node.updated_at
+    const rawLastHeartbeatAt = status?.last_heartbeat_at ?? ('last_heartbeat_at' in node ? node.last_heartbeat_at : undefined)
+
     return {
-        id: node.id,
-        name: node.name,
-        endpoint: node.endpoint,
-        labels: node.labels,
-        onlineStatus: parseOnlineStatus(node.status),
-        updatedAt: node.updated_at,
-        lastHeartbeatAt: node.last_heartbeat_at,
+        id: rawId,
+        name: rawName,
+        endpoint: rawEndpoint,
+        labels: rawLabels,
+        bindingState: parseBindingState(rawBindingState),
+        installPhase: parseInstallPhase(rawInstallPhase),
+        onlineStatus: parseOnlineStatus(rawOnlineStatus),
+        updatedAt: rawUpdatedAt,
+        lastHeartbeatAt: rawLastHeartbeatAt,
+    }
+}
+
+function mapInstallTask(task: InstallTaskPayload): InstallTask {
+    return {
+        id: 'install_task_id' in task && typeof task.install_task_id === 'string' ? task.install_task_id : task.id ?? '',
+        status: parseInstallPhase('task_state' in task ? task.task_state : task.status),
+        message: 'error_message' in task ? task.error_message ?? undefined : task.message,
     }
 }
 
 export async function fetchNodes(): Promise<NodeListResponse> {
-    const data = await requestJson<LegacyPaginated<LegacyNode>>('/api/nm/v1/nodes')
+    const data = await requestJson<LegacyPaginated<LegacyNode | V1NodeSummary>>('/api/nm/v1/nodes')
     const items = data.items || []
     return {
-        nodes: items.map(mapLegacyNode),
+        nodes: items.map(item => mapNodeRecord(item)),
         total: data.total ?? items.length,
     }
 }
@@ -142,14 +245,27 @@ export async function createNode(payload: CreateNodePayload): Promise<NodeDetail
     })
 
     return {
-        ...mapLegacyNode(data),
+        ...mapNodeRecord(data),
     }
 }
 
 export async function fetchNodeDetail(nodeId: string): Promise<NodeDetail> {
-    const data = await requestJson<LegacyNode>(`/api/nm/v1/nodes/${nodeId}`)
+    const data = await requestJson<LegacyNode | V1NodeDetail>(`/api/nm/v1/nodes/${nodeId}`)
+    if ('node' in data) {
+        return {
+            ...mapNodeRecord(data.node, data.status),
+            binding: data.binding
+                ? {
+                      state: parseBindingState(data.binding.binding_state),
+                      agentId: data.binding.agent_id,
+                  }
+                : null,
+            latestInstallTask: data.latest_install_task ? mapInstallTask(data.latest_install_task) : null,
+        }
+    }
+
     return {
-        ...mapLegacyNode(data),
+        ...mapNodeRecord(data),
     }
 }
 
@@ -185,27 +301,30 @@ export async function fetchNodeStatusBatch(nodeIds: string[]): Promise<NodeStatu
 }
 
 export async function fetchNodeBinding(nodeId: string): Promise<NodeBinding> {
-    const data = await requestJson<{ state?: string; agent_id?: string }>(`/api/nm/v1/nodes/${nodeId}/binding`)
+    const data = await requestJson<RawNodeBinding>(`/api/nm/v1/nodes/${nodeId}/binding`)
     return {
-        state: parseBindingState(data.state),
+        state: parseBindingState(data.binding_state ?? data.state),
         agentId: data.agent_id,
     }
 }
 
 export async function installNodeAgent(nodeId: string, payload?: InstallNodePayload): Promise<InstallTask> {
-    return requestJson<InstallTask>(`/api/nm/v1/nodes/${nodeId}/install`, {
+    const data = await requestJson<InstallReceiptPayload>(`/api/nm/v1/nodes/${nodeId}/install`, {
         method: 'POST',
         body: JSON.stringify(payload || {}),
     })
+    return mapInstallTask(data)
 }
 
 export async function fetchInstallTask(taskId: string): Promise<InstallTask> {
-    return requestJson<InstallTask>(`/api/nm/v1/install-tasks/${taskId}`)
+    const data = await requestJson<InstallTaskPayload>(`/api/nm/v1/install-tasks/${taskId}`)
+    return mapInstallTask(data)
 }
 
 export async function fetchLatestInstallTask(nodeId: string): Promise<InstallTask | null> {
     try {
-        return await requestJson<InstallTask>(`/api/nm/v1/nodes/${nodeId}/install-tasks:latest`)
+        const data = await requestJson<InstallTaskPayload>(`/api/nm/v1/nodes/${nodeId}/install-tasks:latest`)
+        return mapInstallTask(data)
     } catch (err) {
         if (err instanceof TransportError && (err.status === 404 || err.code === 'NODE_NOT_FOUND' || err.code === 'TASK_NOT_FOUND')) {
             return null

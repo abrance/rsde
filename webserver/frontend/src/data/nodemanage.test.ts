@@ -37,7 +37,7 @@ describe('nodemanage transport', () => {
         vi.unstubAllGlobals()
     })
 
-    it('fetchNodes maps list envelope into frontend node records', async () => {
+    it('fetchNodes maps v1 node summary pages into frontend node records', async () => {
         fetchMock.mockResolvedValue(
             makeResponse({
                 body: {
@@ -45,11 +45,13 @@ describe('nodemanage transport', () => {
                     data: {
                         items: [
                             {
-                                id: 'node-1',
-                                name: 'worker-1',
-                                endpoint: 'http://worker-1:8080',
+                                node_id: 'node-1',
+                                node_name: 'worker-1',
+                                environment: 'prod',
                                 labels: ['edge'],
-                                status: 'offline',
+                                binding_state: 'bound',
+                                install_phase: 'running',
+                                online_status: 'offline',
                                 updated_at: '2026-06-07T08:00:00Z',
                                 last_heartbeat_at: null,
                             },
@@ -65,8 +67,10 @@ describe('nodemanage transport', () => {
                 {
                     id: 'node-1',
                     name: 'worker-1',
-                    endpoint: 'http://worker-1:8080',
+                    endpoint: undefined,
                     labels: ['edge'],
+                    bindingState: 'BOUND',
+                    installPhase: 'RUNNING',
                     onlineStatus: 'offline',
                     updatedAt: '2026-06-07T08:00:00Z',
                     lastHeartbeatAt: null,
@@ -119,15 +123,45 @@ describe('nodemanage transport', () => {
         )
     })
 
-    it('fetchNodeDetail hits the node detail endpoint', async () => {
+    it('fetchNodeDetail maps v1 aggregate payloads into frontend detail records', async () => {
         fetchMock.mockResolvedValue(
             makeResponse({
                 body: {
                     success: true,
                     data: {
-                        id: 'node-3',
-                        name: 'worker-3',
-                        endpoint: 'http://worker-3:8080',
+                        node: {
+                            node_id: 'node-3',
+                            node_name: 'worker-3',
+                            endpoint: 'http://worker-3:8080',
+                            environment: 'prod',
+                            labels: ['gpu'],
+                            created_at: '2026-06-07T07:00:00Z',
+                            updated_at: '2026-06-07T08:00:00Z',
+                        },
+                        binding: {
+                            node_id: 'node-3',
+                            agent_id: 'agent-3',
+                            binding_state: 'bound',
+                            first_registered_at: '2026-06-07T07:10:00Z',
+                            last_handshake_at: '2026-06-07T08:10:00Z',
+                        },
+                        status: {
+                            lifecycle_state: 'ready',
+                            install_phase: 'succeeded',
+                            binding_state: 'bound',
+                            online_status: 'online',
+                            last_heartbeat_at: '2026-06-07T08:09:00Z',
+                            status_reason: null,
+                        },
+                        latest_install_task: {
+                            install_task_id: 'task-3',
+                            node_id: 'node-3',
+                            task_state: 'running',
+                            error_message: null,
+                            started_at: '2026-06-07T08:00:00Z',
+                            finished_at: null,
+                            retryable: true,
+                        },
                     },
                 },
             }),
@@ -136,6 +170,22 @@ describe('nodemanage transport', () => {
         await expect(fetchNodeDetail('node-3')).resolves.toMatchObject({
             id: 'node-3',
             name: 'worker-3',
+            endpoint: 'http://worker-3:8080',
+            labels: ['gpu'],
+            bindingState: 'BOUND',
+            installPhase: 'COMPLETED',
+            onlineStatus: 'online',
+            updatedAt: '2026-06-07T08:00:00Z',
+            lastHeartbeatAt: '2026-06-07T08:09:00Z',
+            binding: {
+                state: 'BOUND',
+                agentId: 'agent-3',
+            },
+            latestInstallTask: {
+                id: 'task-3',
+                status: 'RUNNING',
+                message: undefined,
+            },
         })
 
         expect(fetchMock).toHaveBeenCalledWith('/api/nm/v1/nodes/node-3', expect.any(Object))
@@ -196,15 +246,56 @@ describe('nodemanage transport', () => {
         expect(fetchMock).not.toHaveBeenCalled()
     })
 
-    it('fetchNodeBinding reads the binding endpoint', async () => {
+    it('fetchNodeBinding maps v1 binding views', async () => {
         fetchMock.mockResolvedValue(
-            makeResponse({ body: { success: true, data: { state: 'BOUND', agent_id: 'agent-1' } } }),
+            makeResponse({ body: { success: true, data: { node_id: 'node-1', agent_id: 'agent-1', binding_state: 'bound' } } }),
         )
 
         await expect(fetchNodeBinding('node-1')).resolves.toEqual({ state: 'BOUND', agentId: 'agent-1' })
     })
 
-    it('installNodeAgent posts to install endpoint', async () => {
+    it('fetchLatestInstallTask maps v1 install task views', async () => {
+        fetchMock.mockResolvedValue(
+            makeResponse({
+                body: {
+                    success: true,
+                    data: {
+                        install_task_id: 'task-9',
+                        node_id: 'node-1',
+                        task_state: 'failed',
+                        error_message: 'ssh failed',
+                        started_at: '2026-06-07T08:00:00Z',
+                        finished_at: '2026-06-07T08:05:00Z',
+                        retryable: true,
+                    },
+                },
+            }),
+        )
+
+        await expect(fetchLatestInstallTask('node-1')).resolves.toEqual({
+            id: 'task-9',
+            status: 'FAILED',
+            message: 'ssh failed',
+        })
+    })
+
+    it('installNodeAgent maps v1 install receipts into the frontend task handle shape', async () => {
+        fetchMock.mockResolvedValue(
+            makeResponse({ body: { success: true, data: { install_task_id: 'task-1', node_id: 'node-1', accepted: true, task_state: 'pending' } } }),
+        )
+
+        await expect(installNodeAgent('node-1')).resolves.toEqual({ id: 'task-1', status: 'PENDING', message: undefined })
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/api/nm/v1/nodes/node-1/install',
+            expect.objectContaining({
+                method: 'POST',
+                body: JSON.stringify({}),
+            }),
+        )
+    })
+
+    it('installNodeAgent still supports legacy flat install task payloads', async () => {
         fetchMock.mockResolvedValue(
             makeResponse({ body: { success: true, data: { id: 'task-1', status: 'RUNNING' } } }),
         )
