@@ -15,11 +15,10 @@ async fn precheck_passes_when_node_is_online() {
     let service = PrecheckService::new(manager.clone());
 
     let node = manager
-        .create(CreateNode {
-            name: "worker-online".to_string(),
-            endpoint: "http://worker-online:8080".to_string(),
-            labels: vec![],
-        })
+        .create(CreateNode::simple(
+            "worker-online",
+            "http://worker-online:8080",
+        ))
         .await
         .unwrap();
 
@@ -38,11 +37,10 @@ async fn precheck_fails_when_node_is_offline() {
     let service = PrecheckService::new(manager.clone());
 
     let node = manager
-        .create(CreateNode {
-            name: "worker-offline".to_string(),
-            endpoint: "http://worker-offline:8080".to_string(),
-            labels: vec![],
-        })
+        .create(CreateNode::simple(
+            "worker-offline",
+            "http://worker-offline:8080",
+        ))
         .await
         .unwrap();
 

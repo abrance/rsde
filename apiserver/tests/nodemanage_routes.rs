@@ -172,14 +172,14 @@ fn nodemanage_assembly_applies_config_install_defaults_without_silent_fallback()
     };
 
     let request = nodemanage::InstallNodeRequest {
-        host: "10.0.0.8".to_string(),
-        ssh_port: 22,
-        username: "root".to_string(),
+        host: Some("10.0.0.8".to_string()),
+        ssh_port: Some(22),
+        username: Some("root".to_string()),
         password: Some("secret".to_string()),
         private_key: None,
-        rsagent_package_url: String::new(),
-        install_root: String::new(),
-        register_callback_url: String::new(),
+        rsagent_package_url: None,
+        install_root: None,
+        register_callback_url: None,
         plugins: vec![],
         labels: vec!["edge".to_string()],
     };
@@ -187,13 +187,13 @@ fn nodemanage_assembly_applies_config_install_defaults_without_silent_fallback()
     let resolved = apiserver::nodemanage::apply_install_request_defaults(&config, request);
 
     assert_eq!(
-        resolved.rsagent_package_url,
-        "https://example.com/from-config.tar.gz"
+        resolved.rsagent_package_url.as_deref(),
+        Some("https://example.com/from-config.tar.gz")
     );
-    assert_eq!(resolved.install_root, "/srv/rsagent");
+    assert_eq!(resolved.install_root.as_deref(), Some("/srv/rsagent"));
     assert_eq!(
-        resolved.register_callback_url,
-        "http://10.0.0.1:3000/api/nodes/agent/sync"
+        resolved.register_callback_url.as_deref(),
+        Some("http://10.0.0.1:3000/api/nodes/agent/sync")
     );
     assert_eq!(resolved.plugins.len(), 1);
     assert_eq!(resolved.plugins[0].name, "metrics");
