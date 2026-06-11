@@ -2,6 +2,7 @@ import type {
     AgentSyncPayload,
     AgentSyncResponse,
     CreateNodePayload,
+    InstallNodePayload,
     InstallTask,
     NodeBinding,
     NodeBindingState,
@@ -13,8 +14,6 @@ import type {
     NodeStatusBatch,
     RebindNodePayload,
 } from '../types/nodemanage'
-
-type InstallNodePayload = Record<string, unknown>
 
 type ApiError = {
     code?: string
@@ -34,6 +33,9 @@ type LegacyNode = {
     name: string
     endpoint?: string
     labels?: string[]
+    environment?: string
+    ssh_port?: number
+    ssh_username?: string
     status?: string
     updated_at?: string
     last_heartbeat_at?: string | null
@@ -49,6 +51,9 @@ type V1NodeSummary = {
     node_name: string
     endpoint?: string
     labels?: string[]
+    environment?: string
+    ssh_port?: number
+    ssh_username?: string
     binding_state?: string
     install_phase?: string
     online_status?: string
@@ -61,6 +66,9 @@ type V1NodeBaseInfo = {
     node_name: string
     endpoint?: string
     labels?: string[]
+    environment?: string
+    ssh_port?: number
+    ssh_username?: string
     updated_at?: string
 }
 
@@ -202,6 +210,9 @@ function mapNodeRecord(node: LegacyNode | V1NodeSummary | V1NodeBaseInfo, status
     const rawName = 'node_name' in node ? node.node_name : node.name
     const rawEndpoint = 'endpoint' in node ? node.endpoint : undefined
     const rawLabels = 'labels' in node ? node.labels : undefined
+    const rawEnvironment = 'environment' in node ? node.environment : undefined
+    const rawSshPort = 'ssh_port' in node ? node.ssh_port : undefined
+    const rawSshUsername = 'ssh_username' in node ? node.ssh_username : undefined
     const rawBindingState = status?.binding_state ?? ('binding_state' in node ? node.binding_state : undefined)
     const rawInstallPhase = status?.install_phase ?? ('install_phase' in node ? node.install_phase : undefined)
     const rawOnlineStatus = status?.online_status ?? ('online_status' in node ? node.online_status : 'status' in node ? node.status : undefined)
@@ -213,6 +224,9 @@ function mapNodeRecord(node: LegacyNode | V1NodeSummary | V1NodeBaseInfo, status
         name: rawName,
         endpoint: rawEndpoint,
         labels: rawLabels,
+        environment: rawEnvironment,
+        sshPort: rawSshPort,
+        sshUsername: rawSshUsername,
         bindingState: parseBindingState(rawBindingState),
         installPhase: parseInstallPhase(rawInstallPhase),
         onlineStatus: parseOnlineStatus(rawOnlineStatus),

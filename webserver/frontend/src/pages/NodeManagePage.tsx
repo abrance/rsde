@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from 'react'
-import type { NodeRecord } from '../types/nodemanage'
+import type { NodeRecord, CreateNodePayload } from '../types/nodemanage'
 import { fetchNodes, createNode, fetchNodeStatusBatch } from '../data/nodemanage'
 import { nodeManageMeta } from '../data/nodeManageMetaData'
 import NodeDetailPanel from '../components/nodemanage/NodeDetailPanel'
@@ -13,10 +13,16 @@ function CreateNodeModal({
 }: { 
     isOpen: boolean; 
     onClose: () => void; 
-    onSubmit: (payload: { name: string; endpoint: string }) => Promise<void>;
+    onSubmit: (payload: CreateNodePayload) => Promise<void>;
 }) {
     const [newNodeName, setNewNodeName] = useState('')
     const [endpoint, setEndpoint] = useState('')
+    const [showAdvanced, setShowAdvanced] = useState(false)
+    const [environment, setEnvironment] = useState('')
+    const [sshPort, setSshPort] = useState('')
+    const [sshUsername, setSshUsername] = useState('')
+    const [sshPassword, setSshPassword] = useState('')
+    const [sshPrivateKey, setSshPrivateKey] = useState('')
     const [createError, setCreateError] = useState<string | null>(null)
     const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -24,6 +30,12 @@ function CreateNodeModal({
         if (!isOpen) {
             setNewNodeName('')
             setEndpoint('')
+            setShowAdvanced(false)
+            setEnvironment('')
+            setSshPort('')
+            setSshUsername('')
+            setSshPassword('')
+            setSshPrivateKey('')
             setCreateError(null)
             setIsSubmitting(false)
         }
@@ -49,10 +61,17 @@ function CreateNodeModal({
         setCreateError(null)
         
         try {
-            await onSubmit({
+            const payload: CreateNodePayload = {
                 name: newNodeName.trim(),
                 endpoint: endpoint.trim(),
-            })
+            }
+            if (environment.trim()) payload.environment = environment.trim()
+            if (sshPort.trim()) payload.ssh_port = parseInt(sshPort.trim(), 10)
+            if (sshUsername.trim()) payload.ssh_username = sshUsername.trim()
+            if (sshPassword) payload.ssh_password = sshPassword
+            if (sshPrivateKey.trim()) payload.ssh_private_key = sshPrivateKey.trim()
+
+            await onSubmit(payload)
         } catch (err) {
             setCreateError(err instanceof Error ? err.message : '创建失败')
             setIsSubmitting(false)
@@ -92,6 +111,76 @@ function CreateNodeModal({
                             disabled={isSubmitting}
                         />
                     </div>
+
+                    <button
+                        type="button"
+                        className="btn btn-text advanced-toggle"
+                        onClick={() => setShowAdvanced(!showAdvanced)}
+                    >
+                        {showAdvanced ? '▾ 收起 SSH 连接信息' : '▸ SSH 连接信息（可选）'}
+                    </button>
+
+                    {showAdvanced && (
+                        <div className="advanced-fields">
+                            <div className="form-group">
+                                <label htmlFor="nodeEnv">环境</label>
+                                <input
+                                    id="nodeEnv"
+                                    type="text"
+                                    value={environment}
+                                    onChange={e => setEnvironment(e.target.value)}
+                                    placeholder="production / staging"
+                                    disabled={isSubmitting}
+                                />
+                            </div>
+                            <div className="form-row">
+                                <div className="form-group form-group-half">
+                                    <label htmlFor="sshPort">SSH 端口</label>
+                                    <input
+                                        id="sshPort"
+                                        type="number"
+                                        value={sshPort}
+                                        onChange={e => setSshPort(e.target.value)}
+                                        placeholder="22"
+                                        disabled={isSubmitting}
+                                    />
+                                </div>
+                                <div className="form-group form-group-half">
+                                    <label htmlFor="sshUsername">SSH 用户名</label>
+                                    <input
+                                        id="sshUsername"
+                                        type="text"
+                                        value={sshUsername}
+                                        onChange={e => setSshUsername(e.target.value)}
+                                        placeholder="root"
+                                        disabled={isSubmitting}
+                                    />
+                                </div>
+                            </div>
+                            <div className="form-group">
+                                <label htmlFor="sshPassword">SSH 密码</label>
+                                <input
+                                    id="sshPassword"
+                                    type="password"
+                                    value={sshPassword}
+                                    onChange={e => setSshPassword(e.target.value)}
+                                    disabled={isSubmitting}
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label htmlFor="sshPrivateKey">SSH 私钥</label>
+                                <textarea
+                                    id="sshPrivateKey"
+                                    value={sshPrivateKey}
+                                    onChange={e => setSshPrivateKey(e.target.value)}
+                                    placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                                    rows={3}
+                                    disabled={isSubmitting}
+                                />
+                            </div>
+                        </div>
+                    )}
+
                     {createError && <p className="error-text">{createError}</p>}
                     <div className="modal-actions">
                         <button 
@@ -224,7 +313,7 @@ export default function NodeManagePage() {
         return () => clearInterval(intervalId)
     }, [selectedNode])
 
-    const handleCreateSubmit = async (payload: { name: string; endpoint: string }) => {
+    const handleCreateSubmit = async (payload: CreateNodePayload) => {
         const result = await createNode(payload)
         
         setIsCreateModalOpen(false)

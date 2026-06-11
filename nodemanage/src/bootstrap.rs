@@ -575,9 +575,7 @@ impl InstallNodeRequest {
         let host = self
             .host
             .or_else(|| Some(node.endpoint.clone()))
-            .ok_or_else(|| {
-                crate::NodeManageError::InvalidInput("host is required".to_string())
-            })?;
+            .ok_or_else(|| crate::NodeManageError::InvalidInput("host is required".to_string()))?;
         let ssh_port = self.ssh_port.or(node.ssh_port).unwrap_or(22);
         let username = self
             .username

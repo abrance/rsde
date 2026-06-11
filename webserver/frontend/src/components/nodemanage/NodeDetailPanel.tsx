@@ -117,6 +117,24 @@ export default function NodeDetailPanel({
                         <span className="info-value">{detailEndpoint}</span>
                     </div>
                 )}
+                {detail.environment && (
+                    <div className="info-row">
+                        <span className="info-label">环境:</span>
+                        <span className="info-value">{detail.environment}</span>
+                    </div>
+                )}
+                {detail.sshPort && (
+                    <div className="info-row">
+                        <span className="info-label">SSH 端口:</span>
+                        <span className="info-value">{detail.sshPort}</span>
+                    </div>
+                )}
+                {detail.sshUsername && (
+                    <div className="info-row">
+                        <span className="info-label">SSH 用户名:</span>
+                        <span className="info-value">{detail.sshUsername}</span>
+                    </div>
+                )}
             </div>
 
             {latestTask && (

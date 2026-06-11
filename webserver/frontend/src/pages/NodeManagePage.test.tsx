@@ -636,7 +636,7 @@ describe('NodeManagePage Integration', () => {
             fireEvent.click(confirmBtn)
             
             await waitFor(() => {
-                expect(installNodeAgent).toHaveBeenCalledWith('n1')
+                expect(installNodeAgent).toHaveBeenCalledWith('n1', undefined)
                 expect(fetchLatestInstallTask).toHaveBeenCalled()
             })
         })

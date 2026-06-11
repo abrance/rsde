@@ -7,6 +7,9 @@ export interface NodeRecord {
     name: string
     endpoint?: string
     labels?: string[]
+    environment?: string
+    sshPort?: number
+    sshUsername?: string
     bindingState?: NodeBindingState
     installPhase?: NodeInstallPhase
     onlineStatus?: NodeOnlineStatus
@@ -39,6 +42,22 @@ export interface CreateNodePayload {
     name: string;
     endpoint: string;
     labels?: string[];
+    environment?: string;
+    ssh_port?: number;
+    ssh_username?: string;
+    ssh_password?: string;
+    ssh_private_key?: string;
+}
+
+export interface InstallNodePayload {
+    host?: string;
+    ssh_port?: number;
+    username?: string;
+    password?: string;
+    private_key?: string;
+    rsagent_package_url?: string;
+    install_root?: string;
+    register_callback_url?: string;
 }
 
 export interface NodeStatusBatchItem {

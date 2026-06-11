@@ -259,7 +259,10 @@ impl NodeInstallTask {
         }
     }
 
-    pub fn with_install_request(mut self, request: &crate::bootstrap::ResolvedInstallRequest) -> Self {
+    pub fn with_install_request(
+        mut self,
+        request: &crate::bootstrap::ResolvedInstallRequest,
+    ) -> Self {
         self.request_host = Some(request.host.clone());
         self.request_ssh_port = Some(request.ssh_port);
         self.request_username = Some(request.username.clone());

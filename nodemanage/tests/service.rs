@@ -376,7 +376,10 @@ async fn status_batch_returns_projection_for_requested_nodes_only() {
 async fn submit_install_task_persists_request_context() {
     let manager = manager();
     let node = manager
-        .create(CreateNode::simple("worker-install-context", "http://worker-install-context:8080"))
+        .create(CreateNode::simple(
+            "worker-install-context",
+            "http://worker-install-context:8080",
+        ))
         .await
         .unwrap();
 
@@ -607,7 +610,10 @@ async fn rebind_node_promotes_target_binding_and_marks_previous_binding_stale() 
     let repository = MemoryNodeRepository::default();
     let manager = manager_with_repository(repository.clone());
     let node = manager
-        .create(CreateNode::simple("worker-rebind", "http://worker-rebind:8080"))
+        .create(CreateNode::simple(
+            "worker-rebind",
+            "http://worker-rebind:8080",
+        ))
         .await
         .unwrap();
 
@@ -656,7 +662,10 @@ async fn rebind_node_promotes_target_binding_and_marks_previous_binding_stale() 
 async fn rebind_node_rejects_blank_target_agent_id() {
     let manager = manager();
     let node = manager
-        .create(CreateNode::simple("worker-rebind-invalid", "http://worker-rebind-invalid:8080"))
+        .create(CreateNode::simple(
+            "worker-rebind-invalid",
+            "http://worker-rebind-invalid:8080",
+        ))
         .await
         .unwrap();
 
@@ -683,7 +692,10 @@ async fn rebind_node_rejects_blank_target_agent_id() {
 async fn rebind_node_returns_target_agent_not_found_when_binding_missing() {
     let manager = manager();
     let node = manager
-        .create(CreateNode::simple("worker-rebind-missing-agent", "http://worker-rebind-missing-agent:8080"))
+        .create(CreateNode::simple(
+            "worker-rebind-missing-agent",
+            "http://worker-rebind-missing-agent:8080",
+        ))
         .await
         .unwrap();
 
@@ -711,7 +723,10 @@ async fn rebind_node_returns_conflict_when_target_agent_is_bound_to_other_node()
     let repository = MemoryNodeRepository::default();
     let manager = manager_with_repository(repository.clone());
     let node = manager
-        .create(CreateNode::simple("worker-rebind-conflict", "http://worker-rebind-conflict:8080"))
+        .create(CreateNode::simple(
+            "worker-rebind-conflict",
+            "http://worker-rebind-conflict:8080",
+        ))
         .await
         .unwrap();
 

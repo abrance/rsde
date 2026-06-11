@@ -18,6 +18,64 @@
     color: var(--text-muted, #666);
 }
 
+.install-form-container .advanced-toggle {
+    font-size: 0.875rem;
+    padding: 0.25rem 0;
+    margin-bottom: 1rem;
+    color: var(--text-muted, #666);
+    cursor: pointer;
+    background: none;
+    border: none;
+}
+
+.install-form-container .advanced-toggle:hover {
+    color: var(--primary-color, #3b82f6);
+}
+
+.install-form-container .advanced-fields {
+    padding: 1rem;
+    margin-bottom: 1rem;
+    background: var(--surface-2, #f5f5f5);
+    border: 1px solid var(--border-color, #eaeaea);
+    border-radius: 4px;
+}
+
+.install-form-container .form-group {
+    margin-bottom: 1rem;
+}
+
+.install-form-container .form-group label {
+    display: block;
+    margin-bottom: 0.25rem;
+    font-size: 0.875rem;
+    color: var(--text-muted, #666);
+}
+
+.install-form-container .form-group input,
+.install-form-container .form-group textarea {
+    width: 100%;
+    padding: 0.5rem;
+    border: 1px solid var(--border-color, #eaeaea);
+    border-radius: 4px;
+    background: var(--surface-1, #fff);
+    color: var(--text-color, #333);
+    font-size: 0.875rem;
+}
+
+.install-form-container .form-group textarea {
+    font-family: monospace;
+    resize: vertical;
+}
+
+.install-form-container .form-row {
+    display: flex;
+    gap: 1rem;
+}
+
+.install-form-container .form-group-half {
+    flex: 1;
+}
+
 .form-actions {
     display: flex;
     justify-content: flex-end;
