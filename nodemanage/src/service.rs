@@ -4,11 +4,12 @@ use query_engine::{HeartbeatStore, QueryEngine};
 
 use crate::{
     AgentRegistration, AgentRunMode, AgentSyncRequest, AgentSyncResponse, BindingState, CreateNode,
-    HeartbeatConfig, HeartbeatRef, InstallNodeRequest, InstallNodeResult, InstallRequestSummary,
-    JobManageConfig, Node, NodeAgentBinding, NodeBindingView, NodeDetail, NodeInstallTask,
-    NodeInstallTaskReceipt, NodeInstallTaskView, NodeManageError, NodeRepository, NodeStatus,
-    NodeStatusBatchItem, NodeStatusSnapshot, NodeStatusView, NodeSummary, OnlineStatus,
-    PaginatedResult, PaginationParams, RebindNodeRequest, RebindNodeResponse, Result,
+    HeartbeatConfig, HeartbeatRef, InstallConfigDefaults, InstallNodeRequest, InstallNodeResult,
+    InstallRequestSummary, InstallTaskState, InstallTaskStep, JobManageConfig, Node,
+    NodeAgentBinding, NodeBindingView, NodeDetail, NodeInstallTask, NodeInstallTaskReceipt,
+    NodeInstallTaskView, NodeManageError, NodeRepository, NodeStatus, NodeStatusBatchItem,
+    NodeStatusSnapshot, NodeStatusView, NodeSummary, OnlineStatus, PaginatedResult,
+    PaginationParams, RebindNodeRequest, RebindNodeResponse, ResolvedInstallRequest, Result,
     RsAgentInstaller, SyncBindingState, TaskFilterDefaults, UpdateNode,
 };
 
@@ -30,6 +31,7 @@ where
 {
     repository: R,
     installer: I,
+    config_defaults: InstallConfigDefaults,
 }
 
 impl<R, I> NodeManager<R, I>
@@ -41,7 +43,22 @@ where
         Self {
             repository,
             installer,
+            config_defaults: InstallConfigDefaults {
+                rsagent_package_url: None,
+                install_root: "/opt/rsagent".to_string(),
+                register_callback_url: "http://127.0.0.1:3000/api/nm/v1/agents/sync".to_string(),
+                plugins: vec![],
+            },
         }
+    }
+
+    pub fn with_config_defaults(mut self, config_defaults: InstallConfigDefaults) -> Self {
+        self.config_defaults = config_defaults;
+        self
+    }
+
+    pub fn config_defaults(&self) -> &InstallConfigDefaults {
+        &self.config_defaults
     }
 
     pub async fn create(&self, input: CreateNode) -> Result<Node> {
@@ -77,13 +94,7 @@ where
             )));
         }
 
-        self.repository
-            .create(Node::new(
-                name.to_string(),
-                endpoint.to_string(),
-                input.labels,
-            ))
-            .await
+        self.repository.create(input.into_node()).await
     }
 
     pub async fn get(&self, id: &str) -> Result<Option<Node>> {
@@ -112,6 +123,21 @@ where
         }
         if let Some(labels) = input.labels {
             node.labels = labels;
+        }
+        if let Some(environment) = input.environment {
+            node.environment = Some(environment);
+        }
+        if let Some(ssh_port) = input.ssh_port {
+            node.ssh_port = Some(ssh_port);
+        }
+        if let Some(ssh_username) = input.ssh_username {
+            node.ssh_username = Some(ssh_username);
+        }
+        if let Some(ssh_password) = input.ssh_password {
+            node.ssh_password = Some(ssh_password);
+        }
+        if let Some(ssh_private_key) = input.ssh_private_key {
+            node.ssh_private_key = Some(ssh_private_key);
         }
         node.updated_at = Utc::now();
 
@@ -143,6 +169,11 @@ where
                 endpoint: None,
                 status: Some(status),
                 labels: None,
+                environment: None,
+                ssh_port: None,
+                ssh_username: None,
+                ssh_password: None,
+                ssh_private_key: None,
             },
         )
         .await
@@ -237,33 +268,108 @@ where
         ))
     }
 
-    pub async fn install_node(&self, request: InstallNodeRequest) -> Result<InstallNodeResult> {
+    pub async fn install_node(&self, request: ResolvedInstallRequest) -> Result<InstallNodeResult> {
         self.installer.install(request).await
     }
 
     pub async fn submit_install_task(
         &self,
         node_id: &str,
-        request: &InstallNodeRequest,
+        request: InstallNodeRequest,
     ) -> Result<NodeInstallTaskReceipt> {
-        self.repository
+        let node = self
+            .repository
             .get(node_id)
             .await?
             .ok_or_else(|| NodeManageError::NotFound(node_id.to_string()))?;
 
+        // Resolve: request > node > config defaults
+        let resolved = request.resolve(&node, &self.config_defaults)?;
+
+        // Create task record
         let task = self
             .repository
             .create_install_task(
-                NodeInstallTask::new(node_id.to_string()).with_install_request(request),
+                NodeInstallTask::new(node_id.to_string()).with_install_request(&resolved),
             )
             .await?;
 
-        Ok(NodeInstallTaskReceipt {
-            install_task_id: task.install_task_id,
-            node_id: task.node_id,
+        let receipt = NodeInstallTaskReceipt {
+            install_task_id: task.install_task_id.clone(),
+            node_id: task.node_id.clone(),
             accepted: true,
             task_state: "pending".to_string(),
-        })
+        };
+
+        // Spawn background installation
+        let installer = self.installer.clone();
+        let repository = self.repository.clone();
+        let task_id = task.install_task_id.clone();
+        let node_id_owned = node_id.to_string();
+
+        tokio::spawn(async move {
+            Self::execute_install(installer, repository, task_id, node_id_owned, resolved).await;
+        });
+
+        Ok(receipt)
+    }
+
+    async fn execute_install(
+        installer: I,
+        repository: R,
+        task_id: String,
+        node_id: String,
+        resolved: ResolvedInstallRequest,
+    ) {
+        // Transition to running
+        let mut task = match repository.get_install_task(&task_id).await {
+            Ok(Some(t)) => t,
+            Ok(None) | Err(_) => return,
+        };
+        task.task_state = InstallTaskState::Running;
+        task.current_step = Some(InstallTaskStep::PrepareInstall);
+        let _ = repository.update_install_task(task).await;
+
+        // Execute installation
+        let result = installer.install(resolved).await;
+
+        let mut task = match repository.get_install_task(&task_id).await {
+            Ok(Some(t)) => t,
+            Ok(None) | Err(_) => return,
+        };
+
+        match result {
+            Ok(install_result) => {
+                if install_result.status == crate::InstallStatus::Registered {
+                    task.task_state = InstallTaskState::Succeeded;
+                    task.current_step = Some(InstallTaskStep::WaitRegister);
+                    task.retryable = false;
+                } else {
+                    task.task_state = InstallTaskState::Failed;
+                    task.current_step = Some(InstallTaskStep::WaitRegister);
+                    task.error_message = install_result.message;
+                    task.retryable = true;
+                }
+            }
+            Err(err) => {
+                task.task_state = InstallTaskState::Failed;
+                task.error_message = Some(err.to_string());
+                task.retryable = true;
+            }
+        }
+
+        task.finished_at = Some(Utc::now());
+        let _ = repository.update_install_task(task).await;
+
+        // Update node status on success
+        if let Ok(Some(task)) = repository.get_install_task(&task_id).await {
+            if task.task_state == InstallTaskState::Succeeded {
+                if let Ok(Some(mut node)) = repository.get(&node_id).await {
+                    node.updated_at = Utc::now();
+                    let _ = repository.update(node).await;
+                }
+            }
+        }
     }
 
     pub async fn rebind_node(
@@ -614,7 +720,7 @@ where
         Ok(NodeSummary {
             node_id: node.id.clone(),
             node_name: node.name.clone(),
-            environment: Self::derive_environment(&node.labels),
+            environment: Self::derive_environment(node),
             labels: node.labels.clone(),
             lifecycle_state: status.lifecycle_state,
             install_phase: status.install_phase,
@@ -630,7 +736,7 @@ where
             node_id: node.id.clone(),
             node_name: node.name.clone(),
             endpoint: node.endpoint.clone(),
-            environment: Self::derive_environment(&node.labels),
+            environment: Self::derive_environment(node),
             labels: node.labels.clone(),
             created_at: node.created_at,
             updated_at: node.updated_at,
@@ -707,8 +813,11 @@ where
         })
     }
 
-    fn derive_environment(labels: &[String]) -> String {
-        labels
+    fn derive_environment(node: &Node) -> String {
+        if let Some(env) = &node.environment {
+            return env.clone();
+        }
+        node.labels
             .iter()
             .find_map(|label| {
                 label

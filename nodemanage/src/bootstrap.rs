@@ -10,14 +10,6 @@ use uuid::Uuid;
 
 use crate::{NodeRepository, PaginationParams, Result};
 
-fn default_install_root() -> String {
-    "/opt/rsagent".to_string()
-}
-
-fn default_register_callback_url() -> String {
-    "http://127.0.0.1:3000/api/nm/v1/agents/sync".to_string()
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InstallPlugin {
     pub name: String,
@@ -376,7 +368,7 @@ impl SshRsAgentInstaller {
         }
     }
 
-    fn effective_plugins(&self, request: &InstallNodeRequest) -> Vec<InstallPlugin> {
+    fn effective_plugins(&self, request: &ResolvedInstallRequest) -> Vec<InstallPlugin> {
         if request.plugins.is_empty() {
             self.default_plugins.clone()
         } else {
@@ -391,7 +383,7 @@ impl SshRsAgentInstaller {
 
 #[async_trait]
 impl RsAgentInstaller for SshRsAgentInstaller {
-    async fn install(&self, request: InstallNodeRequest) -> Result<InstallNodeResult> {
+    async fn install(&self, request: ResolvedInstallRequest) -> Result<InstallNodeResult> {
         let connection = SshConnectionRequest::from_parts(
             request.host.clone(),
             request.ssh_port,
@@ -530,33 +522,128 @@ impl InstallMetadata {
     }
 }
 
+/// All fields are optional; missing values are resolved from Node or config defaults.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InstallNodeRequest {
-    pub host: String,
-    #[serde(default = "default_ssh_port")]
-    pub ssh_port: u16,
-    pub username: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub private_key: Option<String>,
-    pub rsagent_package_url: String,
-    #[serde(default = "default_install_root")]
-    pub install_root: String,
-    #[serde(default = "default_register_callback_url")]
-    pub register_callback_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rsagent_package_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_root: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub register_callback_url: Option<String>,
     #[serde(default)]
     pub plugins: Vec<InstallPlugin>,
     #[serde(default)]
     pub labels: Vec<String>,
 }
 
-fn default_ssh_port() -> u16 {
-    22
+/// Fully-resolved install request with no optional fields.
+/// Produced by merging an `InstallNodeRequest` with Node and config defaults.
+#[derive(Debug, Clone)]
+pub struct ResolvedInstallRequest {
+    pub host: String,
+    pub ssh_port: u16,
+    pub username: String,
+    pub password: Option<String>,
+    pub private_key: Option<String>,
+    pub rsagent_package_url: String,
+    pub install_root: String,
+    pub register_callback_url: String,
+    pub plugins: Vec<InstallPlugin>,
+    pub labels: Vec<String>,
+}
+
+impl InstallNodeRequest {
+    /// Merge this request with a Node and config defaults to produce a fully-resolved request.
+    ///
+    /// Priority: request field > Node field > config default.
+    pub fn resolve(
+        self,
+        node: &crate::Node,
+        config_defaults: &InstallConfigDefaults,
+    ) -> Result<ResolvedInstallRequest> {
+        let host = self
+            .host
+            .or_else(|| Some(node.endpoint.clone()))
+            .ok_or_else(|| {
+                crate::NodeManageError::InvalidInput("host is required".to_string())
+            })?;
+        let ssh_port = self.ssh_port.or(node.ssh_port).unwrap_or(22);
+        let username = self
+            .username
+            .or_else(|| node.ssh_username.clone())
+            .ok_or_else(|| {
+                crate::NodeManageError::InvalidInput("username is required".to_string())
+            })?;
+        let password = self.password.or_else(|| node.ssh_password.clone());
+        let private_key = self.private_key.or_else(|| node.ssh_private_key.clone());
+
+        // At least one auth method must be present
+        if password.is_none() && private_key.is_none() {
+            return Err(crate::NodeManageError::InvalidInput(
+                "ssh auth requires password or private_key".to_string(),
+            ));
+        }
+
+        let rsagent_package_url = self
+            .rsagent_package_url
+            .or_else(|| config_defaults.rsagent_package_url.clone())
+            .ok_or_else(|| {
+                crate::NodeManageError::InvalidInput(
+                    "rsagent_package_url is required (set in request or config)".to_string(),
+                )
+            })?;
+        let install_root = self
+            .install_root
+            .unwrap_or_else(|| config_defaults.install_root.clone());
+        let register_callback_url = self
+            .register_callback_url
+            .unwrap_or_else(|| config_defaults.register_callback_url.clone());
+
+        Ok(ResolvedInstallRequest {
+            host,
+            ssh_port,
+            username,
+            password,
+            private_key,
+            rsagent_package_url,
+            install_root,
+            register_callback_url,
+            plugins: if self.plugins.is_empty() {
+                config_defaults.plugins.clone()
+            } else {
+                self.plugins
+            },
+            labels: if self.labels.is_empty() {
+                node.labels.clone()
+            } else {
+                self.labels
+            },
+        })
+    }
+}
+
+/// Config-level defaults used to fill missing fields in InstallNodeRequest.
+#[derive(Debug, Clone)]
+pub struct InstallConfigDefaults {
+    pub rsagent_package_url: Option<String>,
+    pub install_root: String,
+    pub register_callback_url: String,
+    pub plugins: Vec<InstallPlugin>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum InstallStatus {
     Pending,
     Installing,
@@ -599,7 +686,7 @@ impl InstallNodeResult {
 
 #[async_trait]
 pub trait RsAgentInstaller: Clone + Send + Sync + 'static {
-    async fn install(&self, request: InstallNodeRequest) -> Result<InstallNodeResult>;
+    async fn install(&self, request: ResolvedInstallRequest) -> Result<InstallNodeResult>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -607,7 +694,7 @@ pub struct NoopRsAgentInstaller;
 
 #[async_trait]
 impl RsAgentInstaller for NoopRsAgentInstaller {
-    async fn install(&self, request: InstallNodeRequest) -> Result<InstallNodeResult> {
+    async fn install(&self, request: ResolvedInstallRequest) -> Result<InstallNodeResult> {
         Ok(InstallNodeResult::pending(request.host))
     }
 }

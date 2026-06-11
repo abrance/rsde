@@ -10,12 +10,13 @@ use datalink_engine::{
     DataSourceInput, DataType, EtlMode, EtlPipelineInput, ResultTableInput, StorageType,
 };
 use nodemanage::{
-    AgentSyncRequest, AgentSyncResponse, CreateNode, InstallNodeRequest, InstallPlugin,
-    MemoryNodeRepository, MySqlNodeRepository, Node, NodeBindingView, NodeDetail,
+    AgentSyncRequest, AgentSyncResponse, CreateNode, InstallConfigDefaults, InstallNodeRequest,
+    InstallPlugin, MemoryNodeRepository, MySqlNodeRepository, Node, NodeBindingView, NodeDetail,
     NodeInstallTaskReceipt, NodeInstallTaskView, NodeManageError, NodeManageErrorCode, NodeManager,
     NodeStatus, NodeStatusBatchItem, NodeSummary, NoopRsAgentInstaller, PaginatedResult,
     PaginationParams, RebindNodeRequest, RebindNodeResponse, RemoteExecutor,
-    RepositoryRegistrationWaiter, ShellRemoteExecutor, SshRsAgentInstaller, UpdateNode,
+    RepositoryRegistrationWaiter, ResolvedInstallRequest, ShellRemoteExecutor, SshRsAgentInstaller,
+    UpdateNode,
 };
 use query_engine::{InMemoryHeartbeatStore, QueryEngine};
 use serde::{Deserialize, Serialize};
@@ -90,7 +91,7 @@ impl AppNodeManager {
 
     async fn install_node(
         &self,
-        req: InstallNodeRequest,
+        req: ResolvedInstallRequest,
     ) -> Result<nodemanage::InstallNodeResult, NodeManageError> {
         match self {
             Self::Memory(manager) => manager.install_node(req).await,
@@ -179,7 +180,7 @@ impl AppNodeManager {
     async fn submit_install_task(
         &self,
         node_id: &str,
-        request: &InstallNodeRequest,
+        request: InstallNodeRequest,
     ) -> Result<NodeInstallTaskReceipt, NodeManageError> {
         match self {
             Self::Memory(manager) => manager.submit_install_task(node_id, request).await,
@@ -195,6 +196,13 @@ impl AppNodeManager {
         match self {
             Self::Memory(manager) => manager.rebind_node(node_id, request).await,
             Self::Mysql(manager) => manager.rebind_node(node_id, request).await,
+        }
+    }
+
+    fn config_defaults(&self) -> &InstallConfigDefaults {
+        match self {
+            Self::Memory(manager) => manager.config_defaults(),
+            Self::Mysql(manager) => manager.config_defaults(),
         }
     }
 }
@@ -311,18 +319,16 @@ pub fn apply_install_request_defaults(
     config: &config::nodemanage::NodeManageConfig,
     mut request: InstallNodeRequest,
 ) -> InstallNodeRequest {
-    if request.rsagent_package_url.is_empty()
-        && let Some(url) = &config.rsagent_package_url
-    {
-        request.rsagent_package_url = url.clone();
+    if request.rsagent_package_url.is_none() {
+        request.rsagent_package_url = config.rsagent_package_url.clone();
     }
 
-    if request.install_root.is_empty() {
-        request.install_root = config.install_root.clone();
+    if request.install_root.is_none() {
+        request.install_root = Some(config.install_root.clone());
     }
 
-    if request.register_callback_url.is_empty() {
-        request.register_callback_url = config.register_callback_url.clone();
+    if request.register_callback_url.is_none() {
+        request.register_callback_url = Some(config.register_callback_url.clone());
     }
 
     if request.plugins.is_empty() {
@@ -336,6 +342,13 @@ async fn assemble_manager(
     config: &config::nodemanage::NodeManageConfig,
     shared: Option<SharedMemoryRuntime>,
 ) -> anyhow::Result<(AppNodeManager, Option<MemoryQueryEngine>)> {
+    let config_defaults = InstallConfigDefaults {
+        rsagent_package_url: config.rsagent_package_url.clone(),
+        install_root: config.install_root.clone(),
+        register_callback_url: config.register_callback_url.clone(),
+        plugins: map_install_plugins(&config.install_plugins),
+    };
+
     if let Some(mysql) = &config.mysql {
         let repository = MySqlNodeRepository::new(mysql.clone(), config.table_prefix.clone())
             .await
@@ -349,17 +362,19 @@ async fn assemble_manager(
             config.register_wait_timeout_secs,
         );
         Ok((
-            AppNodeManager::Mysql(NodeManager::new(repository, installer)),
+            AppNodeManager::Mysql(
+                NodeManager::new(repository, installer).with_config_defaults(config_defaults),
+            ),
             None,
         ))
     } else {
         let query_engine =
             shared.map(|shared| QueryEngine::new(shared.datalink_service, shared.heartbeat_store));
         Ok((
-            AppNodeManager::Memory(NodeManager::new(
-                MemoryNodeRepository::default(),
-                NoopRsAgentInstaller,
-            )),
+            AppNodeManager::Memory(
+                NodeManager::new(MemoryNodeRepository::default(), NoopRsAgentInstaller)
+                    .with_config_defaults(config_defaults),
+            ),
             query_engine,
         ))
     }
@@ -690,9 +705,27 @@ async fn install_node(
 ) -> Result<Json<InstallNodeResponse>, (StatusCode, Json<InstallNodeResponse>)> {
     req = apply_install_request_defaults(&state.config, req);
 
+    // Legacy path: resolve using config defaults (no node context)
+    let dummy_node = Node::new(
+        req.host.clone().unwrap_or_default(),
+        req.host.clone().unwrap_or_default(),
+        vec![],
+    );
+    let defaults = state.manager.config_defaults();
+    let resolved = req.resolve(&dummy_node, defaults).map_err(|err| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(InstallNodeResponse {
+                success: false,
+                data: None,
+                error: Some(err.to_string()),
+            }),
+        )
+    })?;
+
     state
         .manager
-        .install_node(req)
+        .install_node(resolved)
         .await
         .map(|result| {
             Json(InstallNodeResponse {
@@ -931,7 +964,7 @@ async fn v1_install_node(
     req = apply_install_request_defaults(&state.config, req);
     state
         .manager
-        .submit_install_task(&node_id, &req)
+        .submit_install_task(&node_id, req)
         .await
         .map(|data| {
             (

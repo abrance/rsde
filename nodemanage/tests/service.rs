@@ -9,7 +9,7 @@ use nodemanage::{
     InstallNodeRequest, InstallStatus, InstallTaskState, InstallTaskStep, JobManageConfig,
     MemoryNodeRepository, NodeAgentBinding, NodeInstallTask, NodeManageError, NodeManager,
     NodeRepository, NodeStatus, NoopRsAgentInstaller, OnlineStatus, PaginationParams,
-    RebindNodeRequest, SyncBindingState, TaskFilterDefaults, UpdateNode,
+    RebindNodeRequest, ResolvedInstallRequest, SyncBindingState, TaskFilterDefaults, UpdateNode,
 };
 use query_engine::{HeartbeatSample, InMemoryHeartbeatStore, QueryEngine};
 use std::{collections::HashMap, time::Duration};
@@ -90,6 +90,11 @@ async fn manager_can_create_and_get_node() {
             name: "worker-1".to_string(),
             endpoint: "http://worker-1:8080".to_string(),
             labels: vec!["gpu".to_string()],
+            environment: None,
+            ssh_port: None,
+            ssh_username: None,
+            ssh_password: None,
+            ssh_private_key: None,
         })
         .await
         .unwrap();
@@ -103,11 +108,7 @@ async fn manager_rejects_create_node_with_blank_required_fields() {
     let manager = manager();
 
     let error = manager
-        .create(CreateNode {
-            name: "   ".to_string(),
-            endpoint: "".to_string(),
-            labels: vec![],
-        })
+        .create(CreateNode::simple("   ", ""))
         .await
         .expect_err("blank create-node input should fail");
 
@@ -125,20 +126,12 @@ async fn manager_rejects_create_node_with_duplicate_endpoint() {
     let manager = manager();
 
     manager
-        .create(CreateNode {
-            name: "worker-1".to_string(),
-            endpoint: "http://worker-1:8080".to_string(),
-            labels: vec![],
-        })
+        .create(CreateNode::simple("worker-1", "http://worker-1:8080"))
         .await
         .unwrap();
 
     let error = manager
-        .create(CreateNode {
-            name: "worker-2".to_string(),
-            endpoint: "http://worker-1:8080".to_string(),
-            labels: vec![],
-        })
+        .create(CreateNode::simple("worker-2", "http://worker-1:8080"))
         .await
         .expect_err("duplicate endpoint should fail");
 
@@ -154,11 +147,7 @@ async fn manager_rejects_create_node_with_duplicate_endpoint() {
 async fn manager_updates_node_fields() {
     let manager = manager();
     let created = manager
-        .create(CreateNode {
-            name: "worker-1".to_string(),
-            endpoint: "http://worker-1:8080".to_string(),
-            labels: vec![],
-        })
+        .create(CreateNode::simple("worker-1", "http://worker-1:8080"))
         .await
         .unwrap();
 
@@ -170,6 +159,7 @@ async fn manager_updates_node_fields() {
                 endpoint: None,
                 status: Some(NodeStatus::Maintenance),
                 labels: Some(vec!["maintenance".to_string()]),
+                ..Default::default()
             },
         )
         .await
@@ -194,11 +184,7 @@ async fn manager_delete_returns_false_for_missing_node() {
 async fn heartbeat_marks_node_online_and_sets_timestamp() {
     let manager = manager();
     let created = manager
-        .create(CreateNode {
-            name: "worker-1".to_string(),
-            endpoint: "http://worker-1:8080".to_string(),
-            labels: vec![],
-        })
+        .create(CreateNode::simple("worker-1", "http://worker-1:8080"))
         .await
         .unwrap();
 
@@ -213,7 +199,7 @@ async fn install_node_delegates_to_rsagent_installer() {
     let manager = manager();
 
     let result = manager
-        .install_node(InstallNodeRequest {
+        .install_node(ResolvedInstallRequest {
             host: "10.0.0.8".to_string(),
             ssh_port: 22,
             username: "root".to_string(),
@@ -286,6 +272,11 @@ async fn list_node_summaries_derives_environment_and_state_axes() {
             name: "worker-proj".to_string(),
             endpoint: "http://worker-proj:8080".to_string(),
             labels: vec!["environment:test".to_string(), "edge".to_string()],
+            environment: None,
+            ssh_port: None,
+            ssh_username: None,
+            ssh_password: None,
+            ssh_private_key: None,
         })
         .await
         .unwrap();
@@ -318,6 +309,11 @@ async fn get_node_detail_aggregates_binding_status_latest_task_and_heartbeat_ref
             name: "worker-detail".to_string(),
             endpoint: "http://worker-detail:8080".to_string(),
             labels: vec!["env:prod".to_string()],
+            environment: None,
+            ssh_port: None,
+            ssh_username: None,
+            ssh_password: None,
+            ssh_private_key: None,
         })
         .await
         .unwrap();
@@ -361,19 +357,11 @@ async fn get_node_detail_aggregates_binding_status_latest_task_and_heartbeat_ref
 async fn status_batch_returns_projection_for_requested_nodes_only() {
     let manager = manager();
     let first = manager
-        .create(CreateNode {
-            name: "worker-1".to_string(),
-            endpoint: "http://worker-1:8080".to_string(),
-            labels: vec![],
-        })
+        .create(CreateNode::simple("worker-1", "http://worker-1:8080"))
         .await
         .unwrap();
     let second = manager
-        .create(CreateNode {
-            name: "worker-2".to_string(),
-            endpoint: "http://worker-2:8080".to_string(),
-            labels: vec![],
-        })
+        .create(CreateNode::simple("worker-2", "http://worker-2:8080"))
         .await
         .unwrap();
 
@@ -388,29 +376,25 @@ async fn status_batch_returns_projection_for_requested_nodes_only() {
 async fn submit_install_task_persists_request_context() {
     let manager = manager();
     let node = manager
-        .create(CreateNode {
-            name: "worker-install-context".to_string(),
-            endpoint: "http://worker-install-context:8080".to_string(),
-            labels: vec![],
-        })
+        .create(CreateNode::simple("worker-install-context", "http://worker-install-context:8080"))
         .await
         .unwrap();
 
     let request = InstallNodeRequest {
-        host: "10.0.0.8".to_string(),
-        ssh_port: 22,
-        username: "root".to_string(),
+        host: Some("10.0.0.8".to_string()),
+        ssh_port: Some(22),
+        username: Some("root".to_string()),
         password: Some("secret".to_string()),
         private_key: None,
-        rsagent_package_url: "https://example.com/rsagent.tar.gz".to_string(),
-        install_root: "/opt/rsagent".to_string(),
-        register_callback_url: "http://127.0.0.1:3000/api/nodes/agent/sync".to_string(),
+        rsagent_package_url: Some("https://example.com/rsagent.tar.gz".to_string()),
+        install_root: Some("/opt/rsagent".to_string()),
+        register_callback_url: Some("http://127.0.0.1:3000/api/nm/v1/agents/sync".to_string()),
         plugins: vec![],
         labels: vec!["edge".to_string()],
     };
 
     let receipt = manager
-        .submit_install_task(&node.id, &request)
+        .submit_install_task(&node.id, request)
         .await
         .unwrap();
     let task = manager
@@ -623,11 +607,7 @@ async fn rebind_node_promotes_target_binding_and_marks_previous_binding_stale() 
     let repository = MemoryNodeRepository::default();
     let manager = manager_with_repository(repository.clone());
     let node = manager
-        .create(CreateNode {
-            name: "worker-rebind".to_string(),
-            endpoint: "http://worker-rebind:8080".to_string(),
-            labels: vec![],
-        })
+        .create(CreateNode::simple("worker-rebind", "http://worker-rebind:8080"))
         .await
         .unwrap();
 
@@ -676,11 +656,7 @@ async fn rebind_node_promotes_target_binding_and_marks_previous_binding_stale() 
 async fn rebind_node_rejects_blank_target_agent_id() {
     let manager = manager();
     let node = manager
-        .create(CreateNode {
-            name: "worker-rebind-invalid".to_string(),
-            endpoint: "http://worker-rebind-invalid:8080".to_string(),
-            labels: vec![],
-        })
+        .create(CreateNode::simple("worker-rebind-invalid", "http://worker-rebind-invalid:8080"))
         .await
         .unwrap();
 
@@ -707,11 +683,7 @@ async fn rebind_node_rejects_blank_target_agent_id() {
 async fn rebind_node_returns_target_agent_not_found_when_binding_missing() {
     let manager = manager();
     let node = manager
-        .create(CreateNode {
-            name: "worker-rebind-missing-agent".to_string(),
-            endpoint: "http://worker-rebind-missing-agent:8080".to_string(),
-            labels: vec![],
-        })
+        .create(CreateNode::simple("worker-rebind-missing-agent", "http://worker-rebind-missing-agent:8080"))
         .await
         .unwrap();
 
@@ -739,11 +711,7 @@ async fn rebind_node_returns_conflict_when_target_agent_is_bound_to_other_node()
     let repository = MemoryNodeRepository::default();
     let manager = manager_with_repository(repository.clone());
     let node = manager
-        .create(CreateNode {
-            name: "worker-rebind-conflict".to_string(),
-            endpoint: "http://worker-rebind-conflict:8080".to_string(),
-            labels: vec![],
-        })
+        .create(CreateNode::simple("worker-rebind-conflict", "http://worker-rebind-conflict:8080"))
         .await
         .unwrap();
 
@@ -852,11 +820,7 @@ async fn sync_response_includes_runtime_and_polling_config_fields() {
 async fn refresh_status_marks_node_online_when_heartbeat_is_fresh() {
     let manager = manager();
     let node = manager
-        .create(CreateNode {
-            name: "worker-1".to_string(),
-            endpoint: "http://worker-1:8080".to_string(),
-            labels: vec![],
-        })
+        .create(CreateNode::simple("worker-1", "http://worker-1:8080"))
         .await
         .unwrap();
 
@@ -901,11 +865,7 @@ async fn refresh_status_marks_node_online_when_heartbeat_is_fresh() {
 async fn refresh_status_marks_node_offline_when_heartbeat_is_missing() {
     let manager = manager();
     let node = manager
-        .create(CreateNode {
-            name: "worker-1".to_string(),
-            endpoint: "http://worker-1:8080".to_string(),
-            labels: vec![],
-        })
+        .create(CreateNode::simple("worker-1", "http://worker-1:8080"))
         .await
         .unwrap();
 
@@ -939,11 +899,7 @@ async fn refresh_status_marks_node_offline_when_heartbeat_is_missing() {
 async fn refresh_status_uses_stable_data_link_id_after_result_table_rename() {
     let manager = manager();
     let node = manager
-        .create(CreateNode {
-            name: "worker-1".to_string(),
-            endpoint: "http://worker-1:8080".to_string(),
-            labels: vec![],
-        })
+        .create(CreateNode::simple("worker-1", "http://worker-1:8080"))
         .await
         .unwrap();
 
@@ -1002,11 +958,7 @@ async fn refresh_status_uses_stable_data_link_id_after_result_table_rename() {
 async fn refresh_status_returns_storage_error_when_heartbeat_data_link_id_no_longer_resolves() {
     let manager = manager();
     let node = manager
-        .create(CreateNode {
-            name: "worker-1".to_string(),
-            endpoint: "http://worker-1:8080".to_string(),
-            labels: vec![],
-        })
+        .create(CreateNode::simple("worker-1", "http://worker-1:8080"))
         .await
         .unwrap();
 
@@ -1048,11 +1000,7 @@ async fn refresh_status_returns_storage_error_when_heartbeat_data_link_id_no_lon
 async fn aggregate_status_snapshot_from_query_reports_online_for_fresh_heartbeat() {
     let manager = manager();
     let node = manager
-        .create(CreateNode {
-            name: "worker-1".to_string(),
-            endpoint: "http://worker-1:8080".to_string(),
-            labels: vec![],
-        })
+        .create(CreateNode::simple("worker-1", "http://worker-1:8080"))
         .await
         .unwrap();
 
@@ -1095,11 +1043,7 @@ async fn aggregate_status_snapshot_from_query_reports_online_for_fresh_heartbeat
 async fn aggregate_status_snapshot_from_query_reports_unknown_when_query_path_breaks() {
     let manager = manager();
     let node = manager
-        .create(CreateNode {
-            name: "worker-1".to_string(),
-            endpoint: "http://worker-1:8080".to_string(),
-            labels: vec![],
-        })
+        .create(CreateNode::simple("worker-1", "http://worker-1:8080"))
         .await
         .unwrap();
 

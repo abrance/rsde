@@ -32,6 +32,16 @@ pub struct Node {
     pub updated_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_heartbeat_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_private_key: Option<String>,
 }
 
 impl Node {
@@ -46,7 +56,36 @@ impl Node {
             created_at: now,
             updated_at: now,
             last_heartbeat_at: None,
+            environment: None,
+            ssh_port: None,
+            ssh_username: None,
+            ssh_password: None,
+            ssh_private_key: None,
         }
+    }
+
+    pub fn from_create(input: CreateNode) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4().to_string(),
+            name: input.name,
+            endpoint: input.endpoint,
+            status: NodeStatus::Offline,
+            labels: input.labels,
+            created_at: now,
+            updated_at: now,
+            last_heartbeat_at: None,
+            environment: input.environment,
+            ssh_port: input.ssh_port,
+            ssh_username: input.ssh_username,
+            ssh_password: input.ssh_password,
+            ssh_private_key: input.ssh_private_key,
+        }
+    }
+
+    /// Returns the effective SSH port (explicit value or default 22).
+    pub fn effective_ssh_port(&self) -> u16 {
+        self.ssh_port.unwrap_or(22)
     }
 }
 
@@ -56,11 +95,35 @@ pub struct CreateNode {
     pub endpoint: String,
     #[serde(default)]
     pub labels: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_private_key: Option<String>,
 }
 
 impl CreateNode {
+    /// Create a node with only the required fields (name, endpoint).
+    pub fn simple(name: impl Into<String>, endpoint: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            endpoint: endpoint.into(),
+            labels: vec![],
+            environment: None,
+            ssh_port: None,
+            ssh_username: None,
+            ssh_password: None,
+            ssh_private_key: None,
+        }
+    }
+
     pub fn into_node(self) -> Node {
-        Node::new(self.name, self.endpoint, self.labels)
+        Node::from_create(self)
     }
 }
 
@@ -70,6 +133,11 @@ pub struct UpdateNode {
     pub endpoint: Option<String>,
     pub status: Option<NodeStatus>,
     pub labels: Option<Vec<String>>,
+    pub environment: Option<String>,
+    pub ssh_port: Option<u16>,
+    pub ssh_username: Option<String>,
+    pub ssh_password: Option<String>,
+    pub ssh_private_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -191,7 +259,7 @@ impl NodeInstallTask {
         }
     }
 
-    pub fn with_install_request(mut self, request: &crate::bootstrap::InstallNodeRequest) -> Self {
+    pub fn with_install_request(mut self, request: &crate::bootstrap::ResolvedInstallRequest) -> Self {
         self.request_host = Some(request.host.clone());
         self.request_ssh_port = Some(request.ssh_port);
         self.request_username = Some(request.username.clone());

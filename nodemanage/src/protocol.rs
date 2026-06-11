@@ -25,6 +25,11 @@ impl AgentRegistration {
             created_at: now,
             updated_at: now,
             last_heartbeat_at: Some(now),
+            environment: None,
+            ssh_port: None,
+            ssh_username: None,
+            ssh_password: None,
+            ssh_private_key: None,
         }
     }
 }

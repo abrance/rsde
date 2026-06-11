@@ -7,10 +7,11 @@ pub mod repository;
 pub mod service;
 
 pub use bootstrap::{
-    InstallDecision, InstallMetadata, InstallMetadataStatus, InstallNodeRequest, InstallNodeResult,
-    InstallPlugin, InstallRuntimeConfig, InstallStatus, InstallStep, NoopRsAgentInstaller,
-    RegistrationWaiter, RemoteExecutor, RepositoryRegistrationWaiter, RsAgentInstaller,
-    ShellRemoteExecutor, SshAuth, SshConnectionRequest, SshRsAgentInstaller,
+    InstallConfigDefaults, InstallDecision, InstallMetadata, InstallMetadataStatus,
+    InstallNodeRequest, InstallNodeResult, InstallPlugin, InstallRuntimeConfig, InstallStatus,
+    InstallStep, NoopRsAgentInstaller, RegistrationWaiter, RemoteExecutor,
+    RepositoryRegistrationWaiter, ResolvedInstallRequest, RsAgentInstaller, ShellRemoteExecutor,
+    SshAuth, SshConnectionRequest, SshRsAgentInstaller,
 };
 pub use error::{NodeManageApiError, NodeManageError, NodeManageErrorCode, Result};
 pub use models::{

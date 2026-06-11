@@ -1,7 +1,7 @@
 use config::rsagent::AgentRuntimeConfig;
 use nodemanage::{
-    InstallDecision, InstallMetadata, InstallMetadataStatus, InstallNodeRequest, InstallPlugin,
-    InstallRuntimeConfig, InstallStatus, InstallStep, RegistrationWaiter, RemoteExecutor,
+    InstallDecision, InstallMetadata, InstallMetadataStatus, InstallPlugin, InstallRuntimeConfig,
+    InstallStatus, InstallStep, RegistrationWaiter, RemoteExecutor, ResolvedInstallRequest,
     RsAgentInstaller, SshAuth, SshConnectionRequest, SshRsAgentInstaller,
 };
 use std::sync::{Arc, Mutex};
@@ -165,7 +165,7 @@ async fn ssh_installer_executes_plan_and_returns_registered_on_successful_wait()
     );
 
     let result = installer
-        .install(InstallNodeRequest {
+        .install(ResolvedInstallRequest {
             host: "10.0.0.8".to_string(),
             ssh_port: 22,
             username: "root".to_string(),
@@ -210,7 +210,7 @@ async fn ssh_installer_returns_failed_when_registration_wait_fails() {
     );
 
     let result = installer
-        .install(InstallNodeRequest {
+        .install(ResolvedInstallRequest {
             host: "10.0.0.8".to_string(),
             ssh_port: 22,
             username: "root".to_string(),

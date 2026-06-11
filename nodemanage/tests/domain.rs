@@ -2,7 +2,7 @@ use nodemanage::{
     AgentRegistration, BindingState, CreateNode, InstallNodeRequest, InstallPlugin, InstallStatus,
     InstallTaskState, InstallTaskStep, MemoryNodeRepository, Node, NodeAgentBinding,
     NodeInstallTask, NodeRepository, NodeStatus, NodeStatusSnapshot, OnlineStatus,
-    PaginationParams,
+    PaginationParams, ResolvedInstallRequest,
 };
 
 #[test]
@@ -94,6 +94,11 @@ fn create_node_builds_node_with_offline_status() {
         name: "worker-2".to_string(),
         endpoint: "http://worker-2:8080".to_string(),
         labels: vec!["cpu".to_string()],
+        environment: None,
+        ssh_port: None,
+        ssh_username: None,
+        ssh_password: None,
+        ssh_private_key: None,
     };
 
     let node = input.into_node();
@@ -105,14 +110,14 @@ fn create_node_builds_node_with_offline_status() {
 #[test]
 fn install_request_records_ssh_target_and_rsagent_source() {
     let request = InstallNodeRequest {
-        host: "10.0.0.8".to_string(),
-        ssh_port: 2222,
-        username: "root".to_string(),
+        host: Some("10.0.0.8".to_string()),
+        ssh_port: Some(2222),
+        username: Some("root".to_string()),
         password: Some("secret".to_string()),
         private_key: None,
-        rsagent_package_url: "https://example.com/rsagent.tar.gz".to_string(),
-        install_root: "/opt/rsagent".to_string(),
-        register_callback_url: "http://127.0.0.1:3000/api/nodes/agent/register".to_string(),
+        rsagent_package_url: Some("https://example.com/rsagent.tar.gz".to_string()),
+        install_root: Some("/opt/rsagent".to_string()),
+        register_callback_url: Some("http://127.0.0.1:3000/api/nodes/agent/register".to_string()),
         plugins: vec![InstallPlugin {
             name: "metrics".to_string(),
             version: "1.2.3".to_string(),
@@ -121,16 +126,16 @@ fn install_request_records_ssh_target_and_rsagent_source() {
         labels: vec!["edge".to_string()],
     };
 
-    assert_eq!(request.host, "10.0.0.8");
-    assert_eq!(request.ssh_port, 2222);
+    assert_eq!(request.host.as_deref(), Some("10.0.0.8"));
+    assert_eq!(request.ssh_port, Some(2222));
     assert_eq!(
-        request.rsagent_package_url,
-        "https://example.com/rsagent.tar.gz"
+        request.rsagent_package_url.as_deref(),
+        Some("https://example.com/rsagent.tar.gz")
     );
-    assert_eq!(request.install_root, "/opt/rsagent");
+    assert_eq!(request.install_root.as_deref(), Some("/opt/rsagent"));
     assert_eq!(
-        request.register_callback_url,
-        "http://127.0.0.1:3000/api/nodes/agent/register"
+        request.register_callback_url.as_deref(),
+        Some("http://127.0.0.1:3000/api/nodes/agent/register")
     );
     assert_eq!(request.plugins.len(), 1);
     assert_eq!(request.plugins[0].name, "metrics");
@@ -151,7 +156,7 @@ fn install_request_defaults_install_root() {
     )
     .unwrap();
 
-    assert_eq!(request.install_root, "/opt/rsagent");
+    assert_eq!(request.install_root, None);
     assert!(request.plugins.is_empty());
 }
 
@@ -212,7 +217,7 @@ fn node_install_task_latest_wins_by_started_at_then_id() {
 
 #[test]
 fn node_install_task_can_record_install_request_context() {
-    let request = InstallNodeRequest {
+    let request = ResolvedInstallRequest {
         host: "10.0.0.9".to_string(),
         ssh_port: 22,
         username: "root".to_string(),
@@ -220,7 +225,7 @@ fn node_install_task_can_record_install_request_context() {
         private_key: None,
         rsagent_package_url: "https://example.com/rsagent.tar.gz".to_string(),
         install_root: "/opt/rsagent".to_string(),
-        register_callback_url: "http://127.0.0.1:3000/api/nodes/agent/sync".to_string(),
+        register_callback_url: "http://127.0.0.1:3000/api/nm/v1/agents/sync".to_string(),
         plugins: vec![InstallPlugin {
             name: "metrics".to_string(),
             version: "1.2.3".to_string(),

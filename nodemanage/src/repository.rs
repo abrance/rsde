@@ -197,6 +197,11 @@ impl MySqlNodeRepository {
                 `created_at` DATETIME NOT NULL,
                 `updated_at` DATETIME NOT NULL,
                 `last_heartbeat_at` DATETIME NULL,
+                `environment` VARCHAR(64) NULL,
+                `ssh_port` SMALLINT UNSIGNED NULL,
+                `ssh_username` VARCHAR(128) NULL,
+                `ssh_password` TEXT NULL,
+                `ssh_private_key` TEXT NULL,
                 INDEX `idx_created_at` (`created_at`),
                 INDEX `idx_status` (`status`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"#,
@@ -262,23 +267,38 @@ impl MySqlNodeRepository {
     }
 
     fn row_to_node(&self, row: Row) -> Result<Node> {
-        let (id, name, endpoint, status, labels_json, created_at, updated_at, last_heartbeat_at): (
-            String,
-            String,
-            String,
-            String,
-            Option<String>,
-            NaiveDateTime,
-            NaiveDateTime,
-            Option<NaiveDateTime>,
-        ) = mysql_async::from_row(row);
+        let id: String = row
+            .get(0)
+            .ok_or_else(|| NodeManageError::Storage("missing column: id".into()))?;
+        let name: String = row
+            .get(1)
+            .ok_or_else(|| NodeManageError::Storage("missing column: name".into()))?;
+        let endpoint: String = row
+            .get(2)
+            .ok_or_else(|| NodeManageError::Storage("missing column: endpoint".into()))?;
+        let status_str: String = row
+            .get(3)
+            .ok_or_else(|| NodeManageError::Storage("missing column: status".into()))?;
+        let labels_json: Option<String> = row.get(4);
+        let created_at: NaiveDateTime = row
+            .get(5)
+            .ok_or_else(|| NodeManageError::Storage("missing column: created_at".into()))?;
+        let updated_at: NaiveDateTime = row
+            .get(6)
+            .ok_or_else(|| NodeManageError::Storage("missing column: updated_at".into()))?;
+        let last_heartbeat_at: Option<NaiveDateTime> = row.get(7);
+        let environment: Option<String> = row.get(8);
+        let ssh_port: Option<u16> = row.get(9);
+        let ssh_username: Option<String> = row.get(10);
+        let ssh_password: Option<String> = row.get(11);
+        let ssh_private_key: Option<String> = row.get(12);
 
         Ok(Node {
             id,
             name,
             endpoint,
-            status: NodeStatus::parse(&status).ok_or_else(|| {
-                NodeManageError::Storage(format!("unknown node status: {status}"))
+            status: NodeStatus::parse(&status_str).ok_or_else(|| {
+                NodeManageError::Storage(format!("unknown node status: {status_str}"))
             })?,
             labels: labels_json
                 .map(|value| serde_json::from_str::<Vec<String>>(&value))
@@ -288,6 +308,11 @@ impl MySqlNodeRepository {
             updated_at: DateTime::from_naive_utc_and_offset(updated_at, Utc),
             last_heartbeat_at: last_heartbeat_at
                 .map(|value| DateTime::from_naive_utc_and_offset(value, Utc)),
+            environment,
+            ssh_port,
+            ssh_username,
+            ssh_password,
+            ssh_private_key,
         })
     }
 
@@ -495,8 +520,10 @@ impl NodeRepository for MySqlNodeRepository {
     async fn create(&self, node: Node) -> Result<Node> {
         let mut conn = self.connection().await?;
         let insert_sql = format!(
-            r#"INSERT INTO `{}` (id, name, endpoint, status, labels, created_at, updated_at, last_heartbeat_at)
-               VALUES (:id, :name, :endpoint, :status, :labels, :created_at, :updated_at, :last_heartbeat_at)"#,
+            r#"INSERT INTO `{}` (id, name, endpoint, status, labels, created_at, updated_at, last_heartbeat_at,
+                                 environment, ssh_port, ssh_username, ssh_password, ssh_private_key)
+               VALUES (:id, :name, :endpoint, :status, :labels, :created_at, :updated_at, :last_heartbeat_at,
+                       :environment, :ssh_port, :ssh_username, :ssh_password, :ssh_private_key)"#,
             self.table_name
         );
         let labels_json = serde_json::to_string(&node.labels)?;
@@ -511,6 +538,11 @@ impl NodeRepository for MySqlNodeRepository {
                 "created_at" => node.created_at.naive_utc(),
                 "updated_at" => node.updated_at.naive_utc(),
                 "last_heartbeat_at" => node.last_heartbeat_at.map(|value| value.naive_utc()),
+                "environment" => &node.environment,
+                "ssh_port" => node.ssh_port,
+                "ssh_username" => &node.ssh_username,
+                "ssh_password" => &node.ssh_password,
+                "ssh_private_key" => &node.ssh_private_key,
             },
         )
         .await
@@ -521,7 +553,7 @@ impl NodeRepository for MySqlNodeRepository {
     async fn get(&self, id: &str) -> Result<Option<Node>> {
         let mut conn = self.connection().await?;
         let select_sql = format!(
-            "SELECT id, name, endpoint, status, labels, created_at, updated_at, last_heartbeat_at FROM `{}` WHERE id = :id",
+            "SELECT id, name, endpoint, status, labels, created_at, updated_at, last_heartbeat_at, environment, ssh_port, ssh_username, ssh_password, ssh_private_key FROM `{}` WHERE id = :id",
             self.table_name
         );
         let row = conn
@@ -541,7 +573,7 @@ impl NodeRepository for MySqlNodeRepository {
             .unwrap_or(0);
 
         let select_sql = format!(
-            "SELECT id, name, endpoint, status, labels, created_at, updated_at, last_heartbeat_at FROM `{}` ORDER BY created_at DESC, id DESC LIMIT :limit OFFSET :offset",
+            "SELECT id, name, endpoint, status, labels, created_at, updated_at, last_heartbeat_at, environment, ssh_port, ssh_username, ssh_password, ssh_private_key FROM `{}` ORDER BY created_at DESC, id DESC LIMIT :limit OFFSET :offset",
             self.table_name
         );
         let rows: Vec<Row> = conn
@@ -572,7 +604,12 @@ impl NodeRepository for MySqlNodeRepository {
                    labels = :labels,
                    created_at = :created_at,
                    updated_at = :updated_at,
-                   last_heartbeat_at = :last_heartbeat_at
+                   last_heartbeat_at = :last_heartbeat_at,
+                   environment = :environment,
+                   ssh_port = :ssh_port,
+                   ssh_username = :ssh_username,
+                   ssh_password = :ssh_password,
+                   ssh_private_key = :ssh_private_key
                WHERE id = :id"#,
             self.table_name
         );
@@ -589,6 +626,11 @@ impl NodeRepository for MySqlNodeRepository {
                     "created_at" => node.created_at.naive_utc(),
                     "updated_at" => node.updated_at.naive_utc(),
                     "last_heartbeat_at" => node.last_heartbeat_at.map(|value| value.naive_utc()),
+                    "environment" => &node.environment,
+                    "ssh_port" => node.ssh_port,
+                    "ssh_username" => &node.ssh_username,
+                    "ssh_password" => &node.ssh_password,
+                    "ssh_private_key" => &node.ssh_private_key,
                 },
             )
             .await
